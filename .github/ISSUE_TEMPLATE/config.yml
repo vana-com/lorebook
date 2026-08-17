@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Vana Docs (source of truth)
+    url: https://docs.vana.org/build-a-vana-app
+    about: The canonical Build a Vana App guide. Check here first.
+  - name: Vana Discord
+    url: https://discord.gg/vana
+    about: Ask the Vana builder community for help.
