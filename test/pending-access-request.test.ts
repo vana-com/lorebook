@@ -40,6 +40,23 @@ test("persists and restores the same non-secret pending request and chapter", ()
   });
 });
 
+test("strips the installed-app capability before persisting a pending request", () => {
+  const localStorage = storage();
+  const withCapability = {
+    ...PENDING,
+    request: {
+      ...PENDING.request,
+      installedAppUrl: "vana-dev://continue?id=dcrcont_secret",
+      installedAppExpiresAt: "2026-08-17T12:04:00.000Z",
+    },
+  };
+
+  assert.equal(savePendingAccessRequest(localStorage, withCapability, NOW), true);
+  const raw = localStorage.getItem(PENDING_ACCESS_REQUEST_KEY) ?? "";
+  assert.equal(raw.includes("dcrcont_secret"), false);
+  assert.deepEqual(loadPendingAccessRequest(localStorage, NOW), PENDING);
+});
+
 test("rejects malformed, overbroad, and non-HTTP(S) pending request records", () => {
   const localStorage = storage();
   for (const value of [

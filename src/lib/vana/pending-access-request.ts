@@ -1,4 +1,9 @@
-import type { AccessRequest, AccessRequestStatus } from "@opendatalabs/vana-sdk/react";
+import {
+  toResumableAccessRequest,
+  type AccessRequest,
+  type AccessRequestStatus,
+  type ResumableAccessRequest,
+} from "@opendatalabs/vana-sdk/react";
 import type { LorebookMode } from "./constants";
 
 export const PENDING_ACCESS_REQUEST_KEY = "lorebook.pending-access-request.v1";
@@ -12,13 +17,26 @@ const MAX_EXPIRY_LENGTH = 64;
 
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
-export type PendingAccessRequest = { mode: LorebookMode; request: AccessRequest };
-type PersistedPendingAccessRequest = PendingAccessRequest & { version: typeof VERSION };
+export type PendingAccessRequest = {
+  mode: LorebookMode;
+  request: ResumableAccessRequest;
+};
+type PersistedPendingAccessRequest = PendingAccessRequest & {
+  version: typeof VERSION;
+};
 
-export function savePendingAccessRequest(storage: StorageLike, pending: PendingAccessRequest, now = Date.now()): boolean {
-  if (!isPendingAccessRequest({ version: VERSION, ...pending }, now)) return false;
+export function savePendingAccessRequest(
+  storage: StorageLike,
+  pending: { mode: LorebookMode; request: AccessRequest },
+  now = Date.now(),
+): boolean {
+  const safePending: PendingAccessRequest = {
+    mode: pending.mode,
+    request: toResumableAccessRequest(pending.request),
+  };
+  if (!isPendingAccessRequest({ version: VERSION, ...safePending }, now)) return false;
   try {
-    const value = JSON.stringify({ version: VERSION, ...pending });
+    const value = JSON.stringify({ version: VERSION, ...safePending });
     if (value.length > MAX_STORED_LENGTH) return false;
     storage.setItem(PENDING_ACCESS_REQUEST_KEY, value);
     return true;
@@ -62,7 +80,7 @@ function isPendingAccessRequest(value: unknown, now: number): value is Persisted
   return isAccessRequest(value.request, now);
 }
 
-function isAccessRequest(value: unknown, now: number): value is AccessRequest {
+function isAccessRequest(value: unknown, now: number): value is ResumableAccessRequest {
   if (!isRecord(value)) return false;
   const keys = Object.keys(value);
   if (!keys.every((key) => ["requestId", "approvalUrl", "appAddress", "network", "expiresAt"].includes(key))) return false;
