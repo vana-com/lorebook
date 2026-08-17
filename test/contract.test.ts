@@ -124,6 +124,20 @@ test("keeps concurrent request bindings independent and rejects tampering", () =
   assert.equal(readRequestBinding(reader, { requestId: "dcr_one", returnOrigin: ORIGIN, now: now + 61 * 60 * 1000 }, SECRET), null);
 });
 
+test("extends a request binding only when the access request outlives one hour", () => {
+  const shortLived = createRequestBinding(
+    { requestId: "dcr_short", app: LOREBOOK_QUICK_APP, runtime: { env: "production", network: "mainnet" }, returnOrigin: ORIGIN, now: 1_000, accessRequestExpiresAt: new Date(2_000).toISOString() },
+    SECRET,
+  );
+  const longerLived = createRequestBinding(
+    { requestId: "dcr_long", app: LOREBOOK_QUICK_APP, runtime: { env: "production", network: "mainnet" }, returnOrigin: ORIGIN, now: 1_000, accessRequestExpiresAt: new Date(3 * 60 * 60 * 1_000).toISOString() },
+    SECRET,
+  );
+  const decode = (binding: string) => JSON.parse(Buffer.from(binding.split(".")[0] ?? "", "base64url").toString("utf8")) as { expiresAt: number };
+  assert.equal(decode(shortLived).expiresAt, 1_000 + 60 * 60 * 1_000);
+  assert.equal(decode(longerLived).expiresAt, 3 * 60 * 60 * 1_000);
+});
+
 test("blocks reads until the grant covering all scopes is ready", () => {
   const ready = {
     status: "ready_for_read" as const,

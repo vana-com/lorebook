@@ -21,6 +21,7 @@ export async function POST(request: NextRequest) {
         app,
         runtime,
         returnOrigin: config.returnOrigin,
+        accessRequestExpiresAt: accessRequest.expiresAt,
       },
       config.appPrivateKey,
     );

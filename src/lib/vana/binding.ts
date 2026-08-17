@@ -43,10 +43,13 @@ export function createRequestBinding(
     app: VanaAppDefinition;
     runtime: VanaRuntime;
     returnOrigin: string;
+    accessRequestExpiresAt?: string;
     now?: number;
   },
   secret: string,
 ): string {
+  const now = input.now ?? Date.now();
+  const accessRequestExpiresAt = input.accessRequestExpiresAt ? Date.parse(input.accessRequestExpiresAt) : Number.NaN;
   const payload: RequestBinding = {
     version: BINDING_VERSION,
     requestId: input.requestId,
@@ -54,7 +57,12 @@ export function createRequestBinding(
     scopes: [...input.app.scopes],
     returnOrigin: input.returnOrigin,
     runtime: input.runtime,
-    expiresAt: (input.now ?? Date.now()) + REQUEST_BINDING_TTL_MS,
+    // The normal one-hour binding is retained unless the authoritative access
+    // request expiry lasts longer, in which case the same browser may need the
+    // binding to resume and read that request after an app handoff.
+    expiresAt: Number.isFinite(accessRequestExpiresAt)
+      ? Math.max(now + REQUEST_BINDING_TTL_MS, accessRequestExpiresAt)
+      : now + REQUEST_BINDING_TTL_MS,
   };
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${encoded}.${sign(encoded, secret)}`;

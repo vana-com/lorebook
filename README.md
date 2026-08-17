@@ -51,7 +51,8 @@ Register Lorebook in Vana Account, then configure:
 
 ```dotenv
 VANA_PRIVATE_KEY=0x...
-APP_URL=http://localhost:3010
+# For phone E2E, use the exact LAN-reachable dev-server URL, for example:
+APP_URL=http://192.168.1.42:3010
 ```
 
 On Vercel, set `APP_URL` to the canonical deployed HTTPS origin. The app identity derived from
@@ -60,7 +61,9 @@ intend to use.
 
 The private key stays server-side. Browser request bindings are signed, HttpOnly, and valid for the
 same one-hour window used by the data connection request so an app installation can finish without
-silently losing the originating request.
+silently losing the originating request. The browser also retains only a versioned, non-secret
+pending request and selected chapter in local storage until that request completes, is reset, or expires;
+this lets the same request resume after a Vana app switch without creating another request.
 
 ## Verification
 

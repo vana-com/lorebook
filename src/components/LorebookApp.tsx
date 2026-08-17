@@ -6,9 +6,14 @@ import {
   type AccessRequestStatus,
   type ApprovedDataResult,
 } from "@opendatalabs/vana-sdk/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { LorebookSnapshot } from "@/lib/combined-snapshot";
 import type { LorebookMode } from "@/lib/vana/constants";
+import {
+  clearPendingAccessRequest,
+  loadPendingAccessRequest,
+  savePendingAccessRequest,
+} from "@/lib/vana/pending-access-request";
 import { buildRequestPath } from "@/lib/vana/request-path";
 import { resolveLaunchRuntime, type VanaRuntime } from "@/lib/vana/runtime";
 
@@ -46,6 +51,8 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function LorebookApp() {
   const [mode, setMode] = useState<LorebookMode>("quick");
+  const [resumeReady, setResumeReady] = useState(false);
+  const didResume = useRef(false);
   const connect = useDirectVanaConnect<LorebookSnapshot>({
     createRequest: () => jsonFetch<AccessRequest>(buildRequestPath(mode, window.location.search), { method: "POST" }),
     getStatus: (requestId) =>
@@ -58,9 +65,30 @@ export function LorebookApp() {
   const data = connect.state.type === "done" ? connect.state.result.data : null;
   const busy = ["creating", "awaiting_approval", "reading"].includes(connect.state.type);
 
+  useEffect(() => {
+    const pending = loadPendingAccessRequest(window.localStorage);
+    if (pending && !didResume.current) {
+      didResume.current = true;
+      setMode(pending.mode);
+      connect.resume(pending.request);
+    }
+    setResumeReady(true);
+  }, [connect.resume]);
+
+  useEffect(() => {
+    if (!resumeReady) return;
+    const state = connect.state;
+    if (state.type === "awaiting_approval" || state.type === "reading") {
+      savePendingAccessRequest(window.localStorage, { mode, request: state.request });
+    } else if (state.type === "done" || state.type === "idle" || isTerminalRequestError(state)) {
+      clearPendingAccessRequest(window.localStorage);
+    }
+  }, [connect.state, mode, resumeReady]);
+
   function chooseMode(next: LorebookMode) {
     if (next === mode || busy) return;
     connect.reset();
+    clearPendingAccessRequest(window.localStorage);
     setMode(next);
   }
 
@@ -117,7 +145,7 @@ export function LorebookApp() {
           <div className="portrait-card">
             {data ? <LoreResult data={data} /> : <EmptyPortrait mode={mode} />}
           </div>
-          <ConnectAction connect={connect} mode={mode} />
+          <ConnectAction connect={connect} mode={mode} onReset={() => clearPendingAccessRequest(window.localStorage)} />
         </div>
       </section>
 
@@ -185,11 +213,11 @@ function Metric({ value, label }: { value: number | null; label: string }) {
   return <div className="metric"><strong>{value == null ? "—" : value.toLocaleString()}</strong><span>{label}</span></div>;
 }
 
-function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>; mode: LorebookMode }) {
+function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>; mode: LorebookMode; onReset: () => void }) {
   const state = connect.state;
   const popupBlocked = state.type === "awaiting_approval" && state.popupBlocked;
   if (state.type === "done") {
-    return <button className="secondary-button" type="button" onClick={() => connect.reset()}>Write another page</button>;
+    return <button className="secondary-button" type="button" onClick={() => { onReset(); connect.reset(); }}>Write another page</button>;
   }
 
   return (
@@ -198,13 +226,17 @@ function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirect
       {popupBlocked && state.type === "awaiting_approval" ? <a className="secondary-button" href={state.request.approvalUrl} target="_blank" rel="noreferrer">Open Vana approval</a> : null}
       {state.type === "idle" ? <button className="primary-button" type="button" onClick={() => void connect.start()}>{mode === "quick" ? "Read my public rhythm" : "Map my curiosities"}<ArrowIcon /></button> : null}
       {["creating", "awaiting_approval", "reading"].includes(state.type) ? <button className="primary-button loading" type="button" disabled><span className="spinner" />{state.type === "reading" ? "Writing your page…" : "Waiting for Vana…"}</button> : null}
-      {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
+      {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { onReset(); connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
       <details className="connection-details">
         <summary>Connection details</summary>
         <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div><RuntimeDetails /></dl>
       </details>
     </div>
   );
+}
+
+function isTerminalRequestError(state: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>["state"]): boolean {
+  return state.type === "error" && /^Access request (completed|denied|expired)$/.test(state.error.message);
 }
 
 function statusCopy(type: string, popupBlocked: boolean, mode: LorebookMode): string {
