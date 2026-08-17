@@ -18,25 +18,33 @@ export function resolveLaunchRuntime(params: URLSearchParams): VanaRuntime {
     throw new LaunchRuntimeError("Launch runtime parameters may only be provided once.");
   }
 
-  const vanaEnv = vanaEnvs[0] ?? null;
-  const network = networks[0] ?? null;
+  const vanaEnv = normalizeVanaEnv(vanaEnvs[0] ?? null);
+  const network = normalizeNetwork(networks[0] ?? null);
 
-  if (vanaEnv !== null && vanaEnv !== "dev") {
-    throw new LaunchRuntimeError("Invalid vana_env. Expected dev or no value.");
+  if (vanaEnvs.length === 1 && vanaEnv === null) {
+    throw new LaunchRuntimeError("Invalid vana_env. Expected dev or production.");
   }
 
-  if (network !== null && network !== "moksha" && network !== "mainnet") {
-    throw new LaunchRuntimeError("Invalid network. Expected moksha, mainnet, or no value.");
-  }
-
-  if (vanaEnv === "dev" && network === "mainnet") {
-    throw new LaunchRuntimeError("The dev environment only supports the moksha network.");
+  if (networks.length === 1 && network === null) {
+    throw new LaunchRuntimeError("Invalid network. Expected moksha or mainnet.");
   }
 
   return {
-    env: vanaEnv === "dev" ? "dev" : "production",
-    // Default to the Moksha testnet; mainnet must be requested explicitly
-    // with ?network=mainnet.
-    network: vanaEnv === "dev" ? "moksha" : (network ?? "moksha"),
+    env: vanaEnv ?? "production",
+    network: network ?? "mainnet",
   };
+}
+
+function normalizeVanaEnv(value: string | null): VanaRuntime["env"] | null {
+  if (value === null) return null;
+  const normalized = value.toLowerCase();
+  if (normalized === "dev" || normalized === "development") return "dev";
+  if (normalized === "production" || normalized === "prod") return "production";
+  return null;
+}
+
+function normalizeNetwork(value: string | null): VanaRuntime["network"] | null {
+  if (value === null) return null;
+  const normalized = value.toLowerCase();
+  return normalized === "moksha" || normalized === "mainnet" ? normalized : null;
 }

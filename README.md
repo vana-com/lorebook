@@ -33,11 +33,17 @@ pnpm dev
 
 Open [http://localhost:3010](http://localhost:3010).
 
-The app defaults to Moksha. The existing runtime query parameters remain available for controlled
-tests:
+The app defaults to the production service plane and Vana mainnet. The runtime selectors match
+the other deployed Vana apps and stay independent:
 
-- `?vana_env=dev` selects the dev Vana endpoints on Moksha.
-- `?network=mainnet` selects mainnet with production endpoints.
+- `vana_env=dev` selects `app-dev.vana.org` and the dev service plane.
+- `network=moksha` selects Moksha testnet.
+- Use both for the standard dev deployment flow:
+  `?vana_env=dev&network=moksha`.
+
+The same Vercel deployment can therefore serve production/mainnet with no query parameters and
+dev/Moksha with the combined query parameters. Lorebook forwards only these selectors to its
+server request boundary; status and read calls remain bound to the signed request runtime.
 
 ## Environment
 
@@ -47,6 +53,10 @@ Register Lorebook in Vana Account, then configure:
 VANA_PRIVATE_KEY=0x...
 APP_URL=http://localhost:3010
 ```
+
+On Vercel, set `APP_URL` to the canonical deployed HTTPS origin. The app identity derived from
+`VANA_PRIVATE_KEY` must be registered and funded in every service-plane/network combination you
+intend to use.
 
 The private key stays server-side. Browser request bindings are signed, HttpOnly, and valid for the
 same one-hour window used by the data connection request so an app installation can finish without

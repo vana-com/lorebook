@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   AccessNotApprovedError,
+  getDirectEndpoints,
   PaymentRequiredError,
   PersonalServerReadError,
 } from "@opendatalabs/vana-sdk/server";
@@ -16,6 +17,7 @@ import { assertGrantReadReady } from "../src/lib/vana/capability";
 import { LOREBOOK_DEEP_APP, LOREBOOK_QUICK_APP } from "../src/lib/vana/constants";
 import { mapClientError } from "../src/lib/vana/errors";
 import { jsonNoStore } from "../src/lib/vana/response";
+import { buildHomePath, buildRequestPath } from "../src/lib/vana/request-path";
 import { resolveLaunchRuntime } from "../src/lib/vana/runtime";
 
 const SECRET = `0x${"1".repeat(64)}`;
@@ -24,20 +26,45 @@ const ORIGIN = "https://snapshot.example";
 test("strictly validates and resolves launch runtime", () => {
   assert.deepEqual(resolveLaunchRuntime(new URLSearchParams()), {
     env: "production",
-    network: "moksha",
+    network: "mainnet",
   });
   assert.deepEqual(resolveLaunchRuntime(new URLSearchParams("network=mainnet")), {
     env: "production",
     network: "mainnet",
   });
-  assert.deepEqual(resolveLaunchRuntime(new URLSearchParams("vana_env=dev")), {
+  assert.deepEqual(resolveLaunchRuntime(new URLSearchParams("vana_env=dev&network=moksha")), {
     env: "dev",
     network: "moksha",
   });
-  assert.throws(() => resolveLaunchRuntime(new URLSearchParams("vana_env=production")), /Invalid vana_env/);
+  assert.deepEqual(resolveLaunchRuntime(new URLSearchParams("vana_env=development&network=MAINNET")), {
+    env: "dev",
+    network: "mainnet",
+  });
+  assert.deepEqual(resolveLaunchRuntime(new URLSearchParams("vana_env=prod&network=moksha")), {
+    env: "production",
+    network: "moksha",
+  });
+  assert.throws(() => resolveLaunchRuntime(new URLSearchParams("vana_env=staging")), /Invalid vana_env/);
   assert.throws(() => resolveLaunchRuntime(new URLSearchParams("network=testnet")), /Invalid network/);
-  assert.throws(() => resolveLaunchRuntime(new URLSearchParams("vana_env=dev&network=mainnet")), /only supports/);
   assert.throws(() => resolveLaunchRuntime(new URLSearchParams("network=moksha&network=mainnet")), /only be provided once/);
+});
+
+test("forwards only the deployment runtime selectors to request creation", () => {
+  assert.equal(
+    buildRequestPath("deep", "?vana_env=dev&network=moksha&utm_source=qa"),
+    "/api/vana/request?mode=deep&vana_env=dev&network=moksha",
+  );
+  assert.equal(buildRequestPath("quick", ""), "/api/vana/request?mode=quick");
+  assert.equal(
+    buildHomePath({ env: "dev", network: "moksha" }),
+    "/?vana_env=dev&network=moksha",
+  );
+  assert.equal(buildHomePath({ env: "production", network: "mainnet" }), "/");
+});
+
+test("SDK service-plane selection resolves the expected approval hosts", () => {
+  assert.equal(new URL(getDirectEndpoints("dev").approvalAppBaseUrl).hostname, "app-dev.vana.org");
+  assert.equal(new URL(getDirectEndpoints("production").approvalAppBaseUrl).hostname, "app.vana.org");
 });
 
 test("derives a fixed return URL from APP_URL origin", () => {

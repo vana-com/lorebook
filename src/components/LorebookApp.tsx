@@ -6,10 +6,11 @@ import {
   type AccessRequestStatus,
   type ApprovedDataResult,
 } from "@opendatalabs/vana-sdk/react";
-import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { LorebookSnapshot } from "@/lib/combined-snapshot";
 import type { LorebookMode } from "@/lib/vana/constants";
+import { buildRequestPath } from "@/lib/vana/request-path";
+import { resolveLaunchRuntime, type VanaRuntime } from "@/lib/vana/runtime";
 
 type ErrorBody = { error?: unknown };
 
@@ -43,19 +44,10 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-function requestPath(mode: LorebookMode): string {
-  const input = new URLSearchParams(window.location.search);
-  const launch = new URLSearchParams({ mode });
-  for (const key of ["vana_env", "network"]) {
-    for (const value of input.getAll(key)) launch.append(key, value);
-  }
-  return `/api/vana/request?${launch.toString()}`;
-}
-
 export function LorebookApp() {
   const [mode, setMode] = useState<LorebookMode>("quick");
   const connect = useDirectVanaConnect<LorebookSnapshot>({
-    createRequest: () => jsonFetch<AccessRequest>(requestPath(mode), { method: "POST" }),
+    createRequest: () => jsonFetch<AccessRequest>(buildRequestPath(mode, window.location.search), { method: "POST" }),
     getStatus: (requestId) =>
       jsonFetch<AccessRequestStatus>(`/api/vana/status?requestId=${encodeURIComponent(requestId)}`),
     readResult: (requestId) =>
@@ -75,10 +67,10 @@ export function LorebookApp() {
   return (
     <main className="lorebook-shell">
       <header className="site-header">
-        <Link className="brand" href="/" aria-label="Lorebook home">
+        <span className="brand">
           <LogoMark />
           <span>Lorebook</span>
-        </Link>
+        </span>
         <span className="privacy-note"><LockIcon /> You choose every page</span>
       </header>
 
@@ -209,7 +201,7 @@ function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirect
       {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
       <details className="connection-details">
         <summary>Connection details</summary>
-        <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div><div><dt>Network</dt><dd>{networkLabel()}</dd></div></dl>
+        <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div><RuntimeDetails /></dl>
       </details>
     </div>
   );
@@ -225,9 +217,20 @@ function statusCopy(type: string, popupBlocked: boolean, mode: LorebookMode): st
   return "";
 }
 
-function networkLabel(): string {
-  if (typeof window === "undefined") return "moksha";
-  return new URLSearchParams(window.location.search).get("network") ?? "moksha";
+function RuntimeDetails() {
+  const [runtime, setRuntime] = useState<VanaRuntime | "invalid">({
+    env: "production",
+    network: "mainnet",
+  });
+  useEffect(() => {
+    try {
+      setRuntime(resolveLaunchRuntime(new URLSearchParams(window.location.search)));
+    } catch {
+      setRuntime("invalid");
+    }
+  }, []);
+  if (runtime === "invalid") return <div><dt>Runtime</dt><dd>invalid</dd></div>;
+  return <><div><dt>Environment</dt><dd>{runtime.env}</dd></div><div><dt>Network</dt><dd>{runtime.network}</dd></div></>;
 }
 
 function LogoMark() {
