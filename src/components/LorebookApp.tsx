@@ -11,6 +11,7 @@ import type { LorebookSnapshot } from "@/lib/combined-snapshot";
 import type { LorebookMode } from "@/lib/vana/constants";
 import {
   clearPendingAccessRequest,
+  clearPendingAccessRequestForTerminalStatus,
   loadPendingAccessRequest,
   savePendingAccessRequest,
 } from "@/lib/vana/pending-access-request";
@@ -55,8 +56,11 @@ export function LorebookApp() {
   const didResume = useRef(false);
   const connect = useDirectVanaConnect<LorebookSnapshot>({
     createRequest: () => jsonFetch<AccessRequest>(buildRequestPath(mode, window.location.search), { method: "POST" }),
-    getStatus: (requestId) =>
-      jsonFetch<AccessRequestStatus>(`/api/vana/status?requestId=${encodeURIComponent(requestId)}`),
+    getStatus: async (requestId) => {
+      const status = await jsonFetch<AccessRequestStatus>(`/api/vana/status?requestId=${encodeURIComponent(requestId)}`);
+      clearPendingAccessRequestForTerminalStatus(window.localStorage, status);
+      return status;
+    },
     readResult: (requestId) =>
       jsonFetch<ApprovedDataResult<LorebookSnapshot>>(
         `/api/vana/read?requestId=${encodeURIComponent(requestId)}`,
@@ -80,8 +84,12 @@ export function LorebookApp() {
     const state = connect.state;
     if (state.type === "awaiting_approval" || state.type === "reading") {
       savePendingAccessRequest(window.localStorage, { mode, request: state.request });
-    } else if (state.type === "done" || state.type === "idle" || isTerminalRequestError(state)) {
+    } else if (state.type === "done" || state.type === "idle") {
       clearPendingAccessRequest(window.localStorage);
+    } else if (state.type === "error") {
+      // Keep a valid request for transient status/read failures, but loading it
+      // revalidates the authoritative expiry and clears it when it elapsed.
+      loadPendingAccessRequest(window.localStorage);
     }
   }, [connect.state, mode, resumeReady]);
 
@@ -233,10 +241,6 @@ function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof 
       </details>
     </div>
   );
-}
-
-function isTerminalRequestError(state: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>["state"]): boolean {
-  return state.type === "error" && /^Access request (completed|denied|expired)$/.test(state.error.message);
 }
 
 function statusCopy(type: string, popupBlocked: boolean, mode: LorebookMode): string {

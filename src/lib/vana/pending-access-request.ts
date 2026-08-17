@@ -1,4 +1,4 @@
-import type { AccessRequest } from "@opendatalabs/vana-sdk/react";
+import type { AccessRequest, AccessRequestStatus } from "@opendatalabs/vana-sdk/react";
 import type { LorebookMode } from "./constants";
 
 export const PENDING_ACCESS_REQUEST_KEY = "lorebook.pending-access-request.v1";
@@ -39,6 +39,16 @@ export function loadPendingAccessRequest(storage: StorageLike, now = Date.now())
 
 export function clearPendingAccessRequest(storage: StorageLike): void {
   try { storage.removeItem(PENDING_ACCESS_REQUEST_KEY); } catch { /* Storage may be unavailable. */ }
+}
+
+/** Clear only when Vana's typed lifecycle says the request cannot be resumed. */
+export function clearPendingAccessRequestForTerminalStatus(
+  storage: StorageLike,
+  status: AccessRequestStatus,
+): boolean {
+  if (status.status !== "completed" && status.status !== "denied" && status.status !== "expired") return false;
+  clearPendingAccessRequest(storage);
+  return true;
 }
 
 function clearAndReturnNull(storage: StorageLike): null {

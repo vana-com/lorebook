@@ -3,6 +3,7 @@ import test from "node:test";
 import type { AccessRequest } from "@opendatalabs/vana-sdk/react";
 import {
   clearPendingAccessRequest,
+  clearPendingAccessRequestForTerminalStatus,
   loadPendingAccessRequest,
   PENDING_ACCESS_REQUEST_KEY,
   savePendingAccessRequest,
@@ -62,6 +63,19 @@ test("clears expired and explicitly reset pending requests", () => {
   assert.equal(savePendingAccessRequest(localStorage, PENDING, NOW), true);
   clearPendingAccessRequest(localStorage);
   assert.equal(localStorage.getItem(PENDING_ACCESS_REQUEST_KEY), null);
+});
+
+test("clears terminal typed statuses but retains pending requests", () => {
+  const localStorage = storage();
+  for (const status of ["completed", "denied", "expired"] as const) {
+    savePendingAccessRequest(localStorage, PENDING, NOW);
+    assert.equal(clearPendingAccessRequestForTerminalStatus(localStorage, { status }), true);
+    assert.equal(localStorage.getItem(PENDING_ACCESS_REQUEST_KEY), null);
+  }
+
+  savePendingAccessRequest(localStorage, PENDING, NOW);
+  assert.equal(clearPendingAccessRequestForTerminalStatus(localStorage, { status: "pending" }), false);
+  assert.notEqual(localStorage.getItem(PENDING_ACCESS_REQUEST_KEY), null);
 });
 
 test("a restored request is handed to resume without creating another request", () => {

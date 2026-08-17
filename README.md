@@ -51,13 +51,22 @@ Register Lorebook in Vana Account, then configure:
 
 ```dotenv
 VANA_PRIVATE_KEY=0x...
-# For phone E2E, use the exact LAN-reachable dev-server URL, for example:
-APP_URL=http://192.168.1.42:3010
+APP_URL=http://localhost:3010
 ```
 
 On Vercel, set `APP_URL` to the canonical deployed HTTPS origin. The app identity derived from
 `VANA_PRIVATE_KEY` must be registered and funded in every service-plane/network combination you
 intend to use.
+
+For phone E2E, override `APP_URL` in `.env.local` with the exact LAN-reachable dev-server URL,
+such as `http://192.168.x.x:3010`; do not copy that placeholder literally.
+
+## Local SDK E2E dependency
+
+This local E2E checkout intentionally links `@opendatalabs/vana-sdk` to the adjacent
+`../vana-sdk/packages/vana-sdk` package. It requires that checkout's `feat/mobile-direct-app-handoff`
+branch with its `dist` built. Lorebook is not independently deployable with this file dependency;
+switch back to a published SDK release before deployment.
 
 The private key stays server-side. Browser request bindings are signed, HttpOnly, and valid for the
 same one-hour window used by the data connection request so an app installation can finish without
