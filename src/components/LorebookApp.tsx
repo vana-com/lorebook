@@ -231,7 +231,13 @@ function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof 
   return (
     <div className="connect-action" aria-live="polite">
       <p>{statusCopy(state.type, popupBlocked, mode)}</p>
-      {popupBlocked && state.type === "awaiting_approval" ? <a className="secondary-button" href={state.request.approvalUrl} target="_blank" rel="noreferrer">Open Vana approval</a> : null}
+      {popupBlocked && state.type === "awaiting_approval" ? (
+        state.request.installedAppUrl ? (
+          <button className="secondary-button" type="button" onClick={() => connect.retryOpen()}>Open Vana</button>
+        ) : (
+          <a className="secondary-button" href={state.request.approvalUrl} target="_blank" rel="noreferrer">Open Vana approval</a>
+        )
+      ) : null}
       {state.type === "idle" ? <button className="primary-button" type="button" onClick={() => void connect.start()}>{mode === "quick" ? "Read my public rhythm" : "Map my curiosities"}<ArrowIcon /></button> : null}
       {["creating", "awaiting_approval", "reading"].includes(state.type) ? <button className="primary-button loading" type="button" disabled><span className="spinner" />{state.type === "reading" ? "Writing your page…" : "Waiting for Vana…"}</button> : null}
       {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { onReset(); connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
@@ -244,7 +250,7 @@ function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof 
 }
 
 function statusCopy(type: string, popupBlocked: boolean, mode: LorebookMode): string {
-  if (popupBlocked) return "Your browser held the approval tab back. Open it to keep going.";
+  if (popupBlocked) return "Vana is ready. Open it to review this request.";
   if (type === "idle") return mode === "quick" ? "We’ll ask for your Spotify profile—nothing more." : "We’ll ask for your ChatGPT conversations and summarize patterns locally.";
   if (type === "creating") return "Opening a private data request…";
   if (type === "awaiting_approval") return "Approve the request in Vana, then come back here.";
