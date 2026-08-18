@@ -14,11 +14,15 @@ import {
   setRequestBindingCookie,
 } from "../src/lib/vana/binding";
 import { assertGrantReadReady } from "../src/lib/vana/capability";
-import { LOREBOOK_DEEP_APP, LOREBOOK_QUICK_APP } from "../src/lib/vana/constants";
+import {
+  LOREBOOK_DEEP_APP,
+  LOREBOOK_DESKTOP_FIXTURE_APP,
+  LOREBOOK_QUICK_APP,
+} from "../src/lib/vana/constants";
 import { mapClientError } from "../src/lib/vana/errors";
 import { jsonNoStore } from "../src/lib/vana/response";
 import { buildHomePath, buildRequestPath } from "../src/lib/vana/request-path";
-import { resolveLaunchRuntime } from "../src/lib/vana/runtime";
+import { resolveFixtureJourney, resolveLaunchRuntime } from "../src/lib/vana/runtime";
 
 const SECRET = `0x${"1".repeat(64)}`;
 const ORIGIN = "https://snapshot.example";
@@ -56,10 +60,38 @@ test("forwards only the deployment runtime selectors to request creation", () =>
   );
   assert.equal(buildRequestPath("quick", ""), "/api/vana/request?mode=quick");
   assert.equal(
+    buildRequestPath(
+      "desktop-saved-tracks",
+      "?vana_env=dev&network=moksha&fixture=spotify-saved-tracks&utm_source=qa",
+    ),
+    "/api/vana/request?mode=deep&vana_env=dev&network=moksha&fixture=spotify-saved-tracks",
+  );
+  assert.equal(
     buildHomePath({ env: "dev", network: "moksha" }),
     "/?vana_env=dev&network=moksha",
   );
   assert.equal(buildHomePath({ env: "production", network: "mainnet" }), "/");
+  assert.equal(
+    buildHomePath({ env: "dev", network: "moksha" }, "desktop-saved-tracks"),
+    "/?vana_env=dev&network=moksha&fixture=spotify-saved-tracks",
+  );
+});
+
+test("enables the Desktop fixture only with explicit dev and Moksha guards", () => {
+  const enabled = new URLSearchParams(
+    "vana_env=dev&network=moksha&fixture=spotify-saved-tracks",
+  );
+  assert.equal(resolveFixtureJourney(enabled), "desktop-saved-tracks");
+  for (const query of [
+    "fixture=spotify-saved-tracks",
+    "vana_env=production&network=moksha&fixture=spotify-saved-tracks",
+    "vana_env=dev&network=mainnet&fixture=spotify-saved-tracks",
+    "vana_env=dev&network=moksha&fixture=other",
+    "vana_env=dev&network=moksha&fixture=spotify-saved-tracks&fixture=spotify-saved-tracks",
+  ]) {
+    assert.throws(() => resolveFixtureJourney(new URLSearchParams(query)), /Invalid Lorebook fixture/);
+  }
+  assert.equal(resolveFixtureJourney(new URLSearchParams("vana_env=dev&network=moksha")), null);
 });
 
 test("SDK service-plane selection resolves the expected approval hosts", () => {
@@ -191,6 +223,37 @@ test("binds a request to the app's full scope set and rejects tampered scopes", 
   );
   setRequestBindingCookie(writer, "dcr_tampered", tamperedBinding, true);
   assert.equal(readRequestBinding(reader, { requestId: "dcr_tampered", returnOrigin: ORIGIN, now: now + 1 }, SECRET), null);
+});
+
+test("authenticates the hidden fixture's exact saved-tracks scope", () => {
+  const now = 1_000;
+  const cookies = new Map<string, string>();
+  const writer = { set: (name: string, value: string) => void cookies.set(name, value) };
+  const reader = {
+    get(name: string) {
+      const value = cookies.get(name);
+      return value === undefined ? undefined : { value };
+    },
+  };
+  const binding = createRequestBinding(
+    {
+      requestId: "dcr_saved_tracks",
+      app: LOREBOOK_DESKTOP_FIXTURE_APP,
+      runtime: { env: "dev", network: "moksha" },
+      returnOrigin: ORIGIN,
+      now,
+    },
+    SECRET,
+  );
+  setRequestBindingCookie(writer, "dcr_saved_tracks", binding, true);
+  assert.deepEqual(
+    readRequestBinding(
+      reader,
+      { requestId: "dcr_saved_tracks", returnOrigin: ORIGIN, now: now + 1 },
+      SECRET,
+    )?.scopes,
+    ["spotify.savedTracks"],
+  );
 });
 
 test("maps SDK and unknown failures to sanitized client errors", () => {

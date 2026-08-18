@@ -19,7 +19,9 @@ export type VanaAppDefinition = {
 };
 
 export const SPOTIFY_PROFILE_SCOPE = "spotify.profile";
+export const SPOTIFY_SAVED_TRACKS_SCOPE = "spotify.savedTracks";
 export const CHATGPT_CONVERSATIONS_SCOPE = "chatgpt.conversations";
+export const DESKTOP_SAVED_TRACKS_FIXTURE = "spotify-saved-tracks";
 
 /** Light/browser-completable Lorebook chapter. */
 export const LOREBOOK_QUICK_APP: VanaAppDefinition = {
@@ -36,12 +38,31 @@ export const LOREBOOK_DEEP_APP: VanaAppDefinition = {
   scopes: [CHATGPT_CONVERSATIONS_SCOPE],
 };
 
-export const LOREBOOK_APPS = [LOREBOOK_QUICK_APP, LOREBOOK_DEEP_APP] as const;
+/** Hidden dev/Moksha fixture used only to prove a real Desktop collection. */
+export const LOREBOOK_DESKTOP_FIXTURE_APP: VanaAppDefinition = {
+  id: "lorebook-desktop-saved-tracks-fixture",
+  name: "Lorebook",
+  source: sourceFromScope(SPOTIFY_SAVED_TRACKS_SCOPE),
+  scopes: [SPOTIFY_SAVED_TRACKS_SCOPE],
+};
+
+export const LOREBOOK_APPS = [
+  LOREBOOK_QUICK_APP,
+  LOREBOOK_DEEP_APP,
+  LOREBOOK_DESKTOP_FIXTURE_APP,
+] as const;
 
 export type LorebookMode = "quick" | "deep";
+export type LorebookJourney = LorebookMode | "desktop-saved-tracks";
 
 export function appForMode(mode: LorebookMode): VanaAppDefinition {
   return mode === "deep" ? LOREBOOK_DEEP_APP : LOREBOOK_QUICK_APP;
+}
+
+export function appForJourney(journey: LorebookJourney): VanaAppDefinition {
+  return journey === "desktop-saved-tracks"
+    ? LOREBOOK_DESKTOP_FIXTURE_APP
+    : appForMode(journey);
 }
 
 export function appForId(id: string): VanaAppDefinition | null {

@@ -4,7 +4,7 @@ import {
   type AccessRequestStatus,
   type ResumableAccessRequest,
 } from "@opendatalabs/vana-sdk/react";
-import type { LorebookMode } from "./constants";
+import type { LorebookJourney } from "./constants";
 
 export const PENDING_ACCESS_REQUEST_KEY = "lorebook.pending-access-request.v1";
 
@@ -19,7 +19,7 @@ const MAX_EXPIRY_LENGTH = 64;
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 export type PendingAccessRequest = {
-  mode: LorebookMode;
+  mode: LorebookJourney;
   request: ResumableAccessRequest;
 };
 type PersistedPendingAccessRequest = PendingAccessRequest & {
@@ -28,7 +28,7 @@ type PersistedPendingAccessRequest = PendingAccessRequest & {
 
 export function savePendingAccessRequest(
   storage: StorageLike,
-  pending: { mode: LorebookMode; request: AccessRequest },
+  pending: { mode: LorebookJourney; request: AccessRequest },
   now = Date.now(),
 ): boolean {
   const safePending: PendingAccessRequest = {
@@ -77,7 +77,10 @@ function clearAndReturnNull(storage: StorageLike): null {
 
 function isPendingAccessRequest(value: unknown, now: number): value is PersistedPendingAccessRequest {
   if (!isRecord(value) || !hasExactKeys(value, ["version", "mode", "request"])) return false;
-  if (value.version !== VERSION || (value.mode !== "quick" && value.mode !== "deep")) return false;
+  if (
+    value.version !== VERSION ||
+    (value.mode !== "quick" && value.mode !== "deep" && value.mode !== "desktop-saved-tracks")
+  ) return false;
   return isAccessRequest(value.request, now);
 }
 

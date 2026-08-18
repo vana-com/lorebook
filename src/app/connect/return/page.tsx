@@ -1,6 +1,6 @@
 import { readRequestBinding } from "@/lib/vana/binding";
 import { assertGrantReadReady } from "@/lib/vana/capability";
-import { appForId } from "@/lib/vana/constants";
+import { appForId, LOREBOOK_DESKTOP_FIXTURE_APP } from "@/lib/vana/constants";
 import { returnStateForStatus, type ReturnState } from "@/lib/vana/return-state";
 import { buildHomePath } from "@/lib/vana/request-path";
 import { getVanaController, getVanaServerConfig } from "@/lib/vana/server";
@@ -50,7 +50,10 @@ async function authoritativeReturnState(requestId: string | null): Promise<Retur
     }
     return {
       state: returnStateForStatus(status.status),
-      homeHref: buildHomePath(binding.runtime),
+      homeHref: buildHomePath(
+        binding.runtime,
+        app.id === LOREBOOK_DESKTOP_FIXTURE_APP.id ? "desktop-saved-tracks" : undefined,
+      ),
     };
   } catch (error) {
     console.error(`[vana/return] Return verification failed for ${requestId}`, error);

@@ -1,3 +1,8 @@
+import {
+  DESKTOP_SAVED_TRACKS_FIXTURE,
+  type LorebookJourney,
+} from "./constants";
+
 export type VanaRuntime = {
   env: "dev" | "production";
   network: "moksha" | "mainnet";
@@ -33,6 +38,24 @@ export function resolveLaunchRuntime(params: URLSearchParams): VanaRuntime {
     env: vanaEnv ?? "production",
     network: network ?? "mainnet",
   };
+}
+
+/** Resolve a hidden fixture only when every explicit dev guard is present. */
+export function resolveFixtureJourney(
+  params: URLSearchParams,
+  runtime = resolveLaunchRuntime(params),
+): Extract<LorebookJourney, "desktop-saved-tracks"> | null {
+  const fixtures = params.getAll("fixture");
+  if (fixtures.length === 0) return null;
+  if (
+    fixtures.length !== 1 ||
+    fixtures[0] !== DESKTOP_SAVED_TRACKS_FIXTURE ||
+    runtime.env !== "dev" ||
+    runtime.network !== "moksha"
+  ) {
+    throw new LaunchRuntimeError("Invalid Lorebook fixture.");
+  }
+  return "desktop-saved-tracks";
 }
 
 function normalizeVanaEnv(value: string | null): VanaRuntime["env"] | null {

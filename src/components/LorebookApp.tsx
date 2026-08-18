@@ -8,7 +8,7 @@ import {
 } from "@opendatalabs/vana-sdk/react";
 import { useEffect, useRef, useState } from "react";
 import type { LorebookSnapshot } from "@/lib/combined-snapshot";
-import type { LorebookMode } from "@/lib/vana/constants";
+import { type LorebookJourney, type LorebookMode } from "@/lib/vana/constants";
 import {
   clearPendingAccessRequest,
   clearPendingAccessRequestForTerminalStatus,
@@ -16,7 +16,7 @@ import {
   savePendingAccessRequest,
 } from "@/lib/vana/pending-access-request";
 import { buildRequestPath } from "@/lib/vana/request-path";
-import { resolveLaunchRuntime, type VanaRuntime } from "@/lib/vana/runtime";
+import { resolveFixtureJourney, resolveLaunchRuntime, type VanaRuntime } from "@/lib/vana/runtime";
 
 type ErrorBody = { error?: unknown };
 
@@ -51,7 +51,7 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function LorebookApp() {
-  const [mode, setMode] = useState<LorebookMode>("quick");
+  const [mode, setMode] = useState<LorebookJourney>("quick");
   const [resumeReady, setResumeReady] = useState(false);
   const didResume = useRef(false);
   const connect = useDirectVanaConnect<LorebookSnapshot>({
@@ -70,11 +70,17 @@ export function LorebookApp() {
   const busy = ["creating", "awaiting_approval", "reading"].includes(connect.state.type);
 
   useEffect(() => {
+    const fixtureEnabled = isDesktopFixtureSearch(window.location.search);
     const pending = loadPendingAccessRequest(window.localStorage);
-    if (pending && !didResume.current) {
+    const canResume = pending?.mode !== "desktop-saved-tracks" || fixtureEnabled;
+    if (pending && canResume && !didResume.current) {
       didResume.current = true;
       setMode(pending.mode);
       connect.resume(pending.request);
+    } else if (pending && !canResume) {
+      clearPendingAccessRequest(window.localStorage);
+    } else if (fixtureEnabled) {
+      setMode("desktop-saved-tracks");
     }
     setResumeReady(true);
   }, [connect.resume]);
@@ -123,7 +129,18 @@ export function LorebookApp() {
         <div className="chapter-picker">
           <SectionHeading number="01" label="Choose a chapter" title="How deep should we read?" />
           <div className="chapter-options">
-            {(Object.keys(CHAPTERS) as LorebookMode[]).map((chapterMode) => {
+            {mode === "desktop-saved-tracks" ? (
+              <div className="chapter-option selected" data-testid="desktop-saved-tracks-fixture">
+                <span className="chapter-radio" aria-hidden="true"><span /></span>
+                <span className="chapter-content">
+                  <span className="chapter-eyebrow">Desktop E2E fixture</span>
+                  <strong>Your liked-song library</strong>
+                  <span>Import a missing private Spotify scope through Vana Desktop.</span>
+                  <small>Spotify saved tracks · Dev and Moksha only</small>
+                </span>
+              </div>
+            ) : null}
+            {mode !== "desktop-saved-tracks" ? (Object.keys(CHAPTERS) as LorebookMode[]).map((chapterMode) => {
               const chapter = CHAPTERS[chapterMode];
               const selected = chapterMode === mode;
               return (
@@ -144,7 +161,7 @@ export function LorebookApp() {
                   </span>
                 </button>
               );
-            })}
+            }) : null}
           </div>
         </div>
 
@@ -169,14 +186,14 @@ function SectionHeading({ number, label, title, light = false }: { number: strin
   return <div className={`section-heading${light ? " light" : ""}`}><span>{number}</span><div><p>{label}</p><h2>{title}</h2></div></div>;
 }
 
-function EmptyPortrait({ mode }: { mode: LorebookMode }) {
+function EmptyPortrait({ mode }: { mode: LorebookJourney }) {
   return (
     <div className="empty-portrait">
       <div className={`portrait-orbit ${mode}`} aria-hidden="true">
         <span className="orbit-dot one" /><span className="orbit-dot two" /><span className="orbit-dot three" />
         <LogoMark />
       </div>
-      <p>{mode === "quick" ? "A small signal is enough to begin." : "Your recurring questions leave a constellation."}</p>
+      <p>{mode === "quick" ? "A small signal is enough to begin." : mode === "desktop-saved-tracks" ? "Your liked songs are waiting in Desktop." : "Your recurring questions leave a constellation."}</p>
     </div>
   );
 }
@@ -196,6 +213,25 @@ function LoreResult({ data }: { data: LorebookSnapshot }) {
           <Metric value={spotify.following} label="following" />
         </div>
         <p className="result-voice">A social listener: collecting people and being collected in return.</p>
+      </article>
+    );
+  }
+
+  if (data.kind === "desktop-fixture") {
+    return (
+      <article className="lore-result">
+        <p className="result-label">Desktop import verified</p>
+        <h3>Your liked-song library made the round trip.</h3>
+        <div className="metric-row">
+          <Metric value={data.savedTracks.total} label="liked songs" />
+          <Metric value={data.savedTracks.recentTracks.length} label="tracks sampled" />
+        </div>
+        <div className="theme-cloud">
+          {data.savedTracks.recentTracks.map((track) => (
+            <span key={`${track.name}:${track.artist}`}>{track.name} · {track.artist}</span>
+          ))}
+        </div>
+        <p className="result-voice">Paid Personal Server read completed.</p>
       </article>
     );
   }
@@ -221,7 +257,7 @@ function Metric({ value, label }: { value: number | null; label: string }) {
   return <div className="metric"><strong>{value == null ? "—" : value.toLocaleString()}</strong><span>{label}</span></div>;
 }
 
-function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>; mode: LorebookMode; onReset: () => void }) {
+function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>; mode: LorebookJourney; onReset: () => void }) {
   const state = connect.state;
   const popupBlocked = state.type === "awaiting_approval" && state.popupBlocked;
   const installedAppAvailable =
@@ -262,7 +298,7 @@ function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof 
           </a>
         </div>
       ) : null}
-      {state.type === "idle" ? <button className="primary-button" type="button" onClick={() => void connect.start()}>{mode === "quick" ? "Read my public rhythm" : "Map my curiosities"}<ArrowIcon /></button> : null}
+      {state.type === "idle" ? <button className="primary-button" type="button" onClick={() => void connect.start()}>{mode === "quick" ? "Read my public rhythm" : mode === "desktop-saved-tracks" ? "Import my liked songs" : "Map my curiosities"}<ArrowIcon /></button> : null}
       {["creating", "awaiting_approval", "reading"].includes(state.type) ? <button className="primary-button loading" type="button" disabled><span className="spinner" />{state.type === "reading" ? "Writing your page…" : "Waiting for Vana…"}</button> : null}
       {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { onReset(); connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
       <details className="connection-details">
@@ -273,11 +309,11 @@ function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof 
   );
 }
 
-function statusCopy(type: string, recoveryPrompt: "open" | "install" | "approval" | null, mode: LorebookMode): string {
+function statusCopy(type: string, recoveryPrompt: "open" | "install" | "approval" | null, mode: LorebookJourney): string {
   if (recoveryPrompt === "open") return "Vana is ready. Open it to review this request.";
   if (recoveryPrompt === "install") return "Install Vana to review this request, or continue on the web.";
   if (recoveryPrompt === "approval") return "Vana approval is ready. Open it to continue.";
-  if (type === "idle") return mode === "quick" ? "We’ll ask for your Spotify profile—nothing more." : "We’ll ask for your ChatGPT conversations and summarize patterns locally.";
+  if (type === "idle") return mode === "quick" ? "We’ll ask for your Spotify profile—nothing more." : mode === "desktop-saved-tracks" ? "We’ll ask Vana Desktop for your Spotify saved tracks." : "We’ll ask for your ChatGPT conversations and summarize patterns locally.";
   if (type === "creating") return "Opening a private data request…";
   if (type === "awaiting_approval") return "Approve the request in Vana, then come back here.";
   if (type === "reading") return "Reading only what you approved…";
@@ -315,4 +351,13 @@ function ArrowIcon() {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isDesktopFixtureSearch(search: string): boolean {
+  try {
+    const params = new URLSearchParams(search);
+    return resolveFixtureJourney(params) === "desktop-saved-tracks";
+  } catch {
+    return false;
+  }
 }

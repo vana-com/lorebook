@@ -122,3 +122,10 @@ test("a restored request is handed to resume without creating another request", 
   assert.equal(resumes, 1);
   assert.equal(creates, 0);
 });
+
+test("persists the hidden Desktop fixture journey for browser return", () => {
+  const localStorage = storage();
+  const fixture = { ...PENDING, mode: "desktop-saved-tracks" as const };
+  assert.equal(savePendingAccessRequest(localStorage, fixture, NOW), true);
+  assert.deepEqual(loadPendingAccessRequest(localStorage, NOW), fixture);
+});

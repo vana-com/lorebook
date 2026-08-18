@@ -23,6 +23,18 @@ Both journeys use the same browser-facing Vana SDK flow:
 
 Lorebook does not contain a Vana deep link, delivery endpoint, connector, or platform detector.
 
+### Hidden Desktop collection fixture
+
+The dev/Moksha deployment exposes one explicit QA-only journey for proving a real missing-data
+Desktop import of `spotify.savedTracks`:
+
+`?vana_env=dev&network=moksha&fixture=spotify-saved-tracks`
+
+All three selectors are required. The fixture is unavailable on production/mainnet, is not shown
+in the normal chapter picker, and does not change either public journey's request contract. A
+successful run renders a bounded saved-track summary only after the paid Personal Server read and
+consumer acknowledgement. The first run requires an authenticated Spotify session in Vana Desktop.
+
 ## Run locally
 
 ```bash
