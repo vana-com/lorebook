@@ -40,9 +40,10 @@ test("persists and restores the same non-secret pending request and chapter", ()
   });
 });
 
-test("strips the installed-app capability but retains its HTTPS recovery URL", () => {
+test("strips the installed-app capability but retains safe recovery destinations", () => {
   const localStorage = storage();
   const installedAppFallbackUrl = "https://app.vana.org/mobile/install";
+  const installedAppReopenUrl = "vana-dev://open";
   const withCapability = {
     ...PENDING,
     request: {
@@ -50,6 +51,7 @@ test("strips the installed-app capability but retains its HTTPS recovery URL", (
       installedAppUrl: "vana-dev://continue?id=dcrcont_secret",
       installedAppExpiresAt: "2026-08-17T12:04:00.000Z",
       installedAppFallbackUrl,
+      installedAppReopenUrl,
     },
   };
 
@@ -58,17 +60,18 @@ test("strips the installed-app capability but retains its HTTPS recovery URL", (
   assert.equal(raw.includes("dcrcont_secret"), false);
   assert.deepEqual(loadPendingAccessRequest(localStorage, NOW), {
     ...PENDING,
-    request: { ...PENDING.request, installedAppFallbackUrl },
+    request: { ...PENDING.request, installedAppFallbackUrl, installedAppReopenUrl },
   });
 });
 
-test("rejects malformed, overbroad, and non-HTTP(S) pending request records", () => {
+test("rejects malformed, overbroad, and unsafe recovery records", () => {
   const localStorage = storage();
   for (const value of [
     "{",
     JSON.stringify({ version: 1, ...PENDING, extra: true }),
     JSON.stringify({ version: 1, mode: "deep", request: { ...PENDING.request, approvalUrl: "javascript:alert(1)" } }),
     JSON.stringify({ version: 1, mode: "deep", request: { ...PENDING.request, installedAppFallbackUrl: "http://app.vana.org/mobile/install" } }),
+    JSON.stringify({ version: 1, mode: "deep", request: { ...PENDING.request, installedAppReopenUrl: "vana-dev://open?request=forbidden" } }),
     JSON.stringify({ version: 1, mode: "other", request: PENDING.request }),
   ]) {
     localStorage.setItem(PENDING_ACCESS_REQUEST_KEY, value);

@@ -226,26 +226,39 @@ function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof 
   const popupBlocked = state.type === "awaiting_approval" && state.popupBlocked;
   const installedAppAvailable =
     state.type === "awaiting_approval" && state.request.installedAppUrl !== undefined;
+  const reopenAppAvailable =
+    state.type === "awaiting_approval" && state.request.installedAppReopenUrl !== undefined;
   const installFallbackAvailable =
     state.type === "awaiting_approval" && state.request.installedAppFallbackUrl !== undefined;
-  const recoveryAvailable = popupBlocked || installedAppAvailable || installFallbackAvailable;
+  const recoveryAvailable =
+    popupBlocked || installedAppAvailable || reopenAppAvailable || installFallbackAvailable;
+  const recoveryPrompt = installedAppAvailable || reopenAppAvailable
+    ? "open"
+    : installFallbackAvailable
+      ? "install"
+      : popupBlocked
+        ? "approval"
+        : null;
   if (state.type === "done") {
     return <button className="secondary-button" type="button" onClick={() => { onReset(); connect.reset(); }}>Write another page</button>;
   }
 
   return (
     <div className="connect-action" aria-live="polite">
-      <p>{statusCopy(state.type, recoveryAvailable, mode)}</p>
+      <p>{statusCopy(state.type, recoveryPrompt, mode)}</p>
       {state.type === "awaiting_approval" && recoveryAvailable ? (
         <div className="approval-recovery">
           {installedAppAvailable ? (
             <button className="secondary-button" type="button" onClick={() => connect.retryOpen()}>Open Vana</button>
           ) : null}
+          {!installedAppAvailable && reopenAppAvailable ? (
+            <a className="secondary-button" href={state.request.installedAppReopenUrl}>Open Vana</a>
+          ) : null}
           {installFallbackAvailable ? (
             <a className="secondary-button" href={state.request.installedAppFallbackUrl} target="_blank" rel="noreferrer">Install Vana</a>
           ) : null}
           <a className="secondary-button" href={state.request.approvalUrl} target="_blank" rel="noreferrer">
-            {installedAppAvailable || installFallbackAvailable ? "Continue on the web" : "Open Vana approval"}
+            {installedAppAvailable || reopenAppAvailable || installFallbackAvailable ? "Continue on the web" : "Open Vana approval"}
           </a>
         </div>
       ) : null}
@@ -260,8 +273,10 @@ function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof 
   );
 }
 
-function statusCopy(type: string, needsManualOpen: boolean, mode: LorebookMode): string {
-  if (needsManualOpen) return "Vana is ready. Open it to review this request.";
+function statusCopy(type: string, recoveryPrompt: "open" | "install" | "approval" | null, mode: LorebookMode): string {
+  if (recoveryPrompt === "open") return "Vana is ready. Open it to review this request.";
+  if (recoveryPrompt === "install") return "Install Vana to review this request, or continue on the web.";
+  if (recoveryPrompt === "approval") return "Vana approval is ready. Open it to continue.";
   if (type === "idle") return mode === "quick" ? "We’ll ask for your Spotify profile—nothing more." : "We’ll ask for your ChatGPT conversations and summarize patterns locally.";
   if (type === "creating") return "Opening a private data request…";
   if (type === "awaiting_approval") return "Approve the request in Vana, then come back here.";

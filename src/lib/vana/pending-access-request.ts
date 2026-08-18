@@ -84,7 +84,7 @@ function isPendingAccessRequest(value: unknown, now: number): value is Persisted
 function isAccessRequest(value: unknown, now: number): value is ResumableAccessRequest {
   if (!isRecord(value)) return false;
   const keys = Object.keys(value);
-  if (!keys.every((key) => ["requestId", "approvalUrl", "installedAppFallbackUrl", "appAddress", "network", "expiresAt"].includes(key))) return false;
+  if (!keys.every((key) => ["requestId", "approvalUrl", "installedAppFallbackUrl", "installedAppReopenUrl", "appAddress", "network", "expiresAt"].includes(key))) return false;
   if (!hasRequiredKeys(value, ["requestId", "approvalUrl", "appAddress", "expiresAt"])) return false;
   if (typeof value.requestId !== "string" || value.requestId.length === 0 || value.requestId.length > MAX_REQUEST_ID_LENGTH || typeof value.approvalUrl !== "string" || value.approvalUrl.length === 0 || value.approvalUrl.length > MAX_APPROVAL_URL_LENGTH || typeof value.appAddress !== "string" || value.appAddress.length === 0 || value.appAddress.length > MAX_APP_ADDRESS_LENGTH || typeof value.expiresAt !== "string" || value.expiresAt.length === 0 || value.expiresAt.length > MAX_EXPIRY_LENGTH) return false;
   if (value.network !== undefined && value.network !== "mainnet" && value.network !== "moksha") return false;
@@ -93,6 +93,16 @@ function isAccessRequest(value: unknown, now: number): value is ResumableAccessR
     try {
       if (new URL(value.installedAppFallbackUrl).protocol !== "https:") return false;
     } catch { return false; }
+  }
+  if (value.installedAppReopenUrl !== undefined) {
+    if (typeof value.installedAppReopenUrl !== "string") return false;
+    const safeRequest = toResumableAccessRequest({
+      requestId: value.requestId,
+      approvalUrl: value.approvalUrl,
+      appAddress: value.appAddress,
+      installedAppReopenUrl: value.installedAppReopenUrl,
+    });
+    if (safeRequest.installedAppReopenUrl === undefined) return false;
   }
   try {
     const approvalUrl = new URL(value.approvalUrl);
