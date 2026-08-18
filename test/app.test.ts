@@ -2,7 +2,10 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import { mapConversationLore } from "../src/lib/chatgpt-conversations";
 import { mapSpotifyProfile } from "../src/lib/spotify-profile";
-import { mapSpotifySavedTracks } from "../src/lib/spotify-saved-tracks";
+import {
+  mapSpotifySavedTracks,
+  SAVED_TRACK_DISPLAY_FIELD_MAX_BYTES,
+} from "../src/lib/spotify-saved-tracks";
 
 test("maps a Spotify profile into the quick Lorebook chapter", () => {
   assert.deepEqual(mapSpotifyProfile({
@@ -65,4 +68,26 @@ test("maps only a small proof from a real saved-tracks payload", () => {
     ],
   });
   assert.equal(JSON.stringify(mapped).includes("private:one"), false);
+});
+
+test("normalizes and byte-bounds untrusted saved-track display fields", () => {
+  const oversizedName = `  Cafe\u0301 ${"🎵".repeat(100)} trailing secret  `;
+  const oversizedArtist = `  ${"藝術家".repeat(100)}  `;
+  const mapped = mapSpotifySavedTracks({
+    savedTracks: [
+      { name: oversizedName, artists: [{ name: oversizedArtist }] },
+      { name: "   ", artists: [{ name: "ignored" }] },
+    ],
+    total: 2,
+  });
+
+  assert.equal(mapped.recentTracks.length, 1);
+  const [track] = mapped.recentTracks;
+  assert.ok(track);
+  assert.ok(track.name.startsWith("Café "));
+  assert.equal(track.name.includes("trailing secret"), false);
+  assert.ok(new TextEncoder().encode(track.name).byteLength <= SAVED_TRACK_DISPLAY_FIELD_MAX_BYTES);
+  assert.ok(new TextEncoder().encode(track.artist).byteLength <= SAVED_TRACK_DISPLAY_FIELD_MAX_BYTES);
+  assert.equal(track.name, track.name.normalize("NFC"));
+  assert.equal(track.artist, track.artist.normalize("NFC"));
 });
