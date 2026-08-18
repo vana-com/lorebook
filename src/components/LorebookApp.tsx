@@ -226,20 +226,26 @@ function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof 
   const popupBlocked = state.type === "awaiting_approval" && state.popupBlocked;
   const installedAppAvailable =
     state.type === "awaiting_approval" && state.request.installedAppUrl !== undefined;
+  const installFallbackAvailable =
+    state.type === "awaiting_approval" && state.request.installedAppFallbackUrl !== undefined;
+  const recoveryAvailable = popupBlocked || installedAppAvailable || installFallbackAvailable;
   if (state.type === "done") {
     return <button className="secondary-button" type="button" onClick={() => { onReset(); connect.reset(); }}>Write another page</button>;
   }
 
   return (
     <div className="connect-action" aria-live="polite">
-      <p>{statusCopy(state.type, popupBlocked || installedAppAvailable, mode)}</p>
-      {state.type === "awaiting_approval" && (popupBlocked || installedAppAvailable) ? (
+      <p>{statusCopy(state.type, recoveryAvailable, mode)}</p>
+      {state.type === "awaiting_approval" && recoveryAvailable ? (
         <div className="approval-recovery">
           {installedAppAvailable ? (
             <button className="secondary-button" type="button" onClick={() => connect.retryOpen()}>Open Vana</button>
           ) : null}
+          {installFallbackAvailable ? (
+            <a className="secondary-button" href={state.request.installedAppFallbackUrl} target="_blank" rel="noreferrer">Install Vana</a>
+          ) : null}
           <a className="secondary-button" href={state.request.approvalUrl} target="_blank" rel="noreferrer">
-            {installedAppAvailable ? "Continue on the web" : "Open Vana approval"}
+            {installedAppAvailable || installFallbackAvailable ? "Continue on the web" : "Open Vana approval"}
           </a>
         </div>
       ) : null}

@@ -12,6 +12,7 @@ const VERSION = 1;
 const MAX_STORED_LENGTH = 4_096;
 const MAX_REQUEST_ID_LENGTH = 256;
 const MAX_APPROVAL_URL_LENGTH = 2_048;
+const MAX_FALLBACK_URL_LENGTH = 2_048;
 const MAX_APP_ADDRESS_LENGTH = 128;
 const MAX_EXPIRY_LENGTH = 64;
 
@@ -83,10 +84,16 @@ function isPendingAccessRequest(value: unknown, now: number): value is Persisted
 function isAccessRequest(value: unknown, now: number): value is ResumableAccessRequest {
   if (!isRecord(value)) return false;
   const keys = Object.keys(value);
-  if (!keys.every((key) => ["requestId", "approvalUrl", "appAddress", "network", "expiresAt"].includes(key))) return false;
+  if (!keys.every((key) => ["requestId", "approvalUrl", "installedAppFallbackUrl", "appAddress", "network", "expiresAt"].includes(key))) return false;
   if (!hasRequiredKeys(value, ["requestId", "approvalUrl", "appAddress", "expiresAt"])) return false;
   if (typeof value.requestId !== "string" || value.requestId.length === 0 || value.requestId.length > MAX_REQUEST_ID_LENGTH || typeof value.approvalUrl !== "string" || value.approvalUrl.length === 0 || value.approvalUrl.length > MAX_APPROVAL_URL_LENGTH || typeof value.appAddress !== "string" || value.appAddress.length === 0 || value.appAddress.length > MAX_APP_ADDRESS_LENGTH || typeof value.expiresAt !== "string" || value.expiresAt.length === 0 || value.expiresAt.length > MAX_EXPIRY_LENGTH) return false;
   if (value.network !== undefined && value.network !== "mainnet" && value.network !== "moksha") return false;
+  if (value.installedAppFallbackUrl !== undefined) {
+    if (typeof value.installedAppFallbackUrl !== "string" || value.installedAppFallbackUrl.length === 0 || value.installedAppFallbackUrl.length > MAX_FALLBACK_URL_LENGTH) return false;
+    try {
+      if (new URL(value.installedAppFallbackUrl).protocol !== "https:") return false;
+    } catch { return false; }
+  }
   try {
     const approvalUrl = new URL(value.approvalUrl);
     if (approvalUrl.protocol !== "https:" && approvalUrl.protocol !== "http:") return false;

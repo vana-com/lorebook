@@ -40,21 +40,26 @@ test("persists and restores the same non-secret pending request and chapter", ()
   });
 });
 
-test("strips the installed-app capability before persisting a pending request", () => {
+test("strips the installed-app capability but retains its HTTPS recovery URL", () => {
   const localStorage = storage();
+  const installedAppFallbackUrl = "https://app.vana.org/mobile/install";
   const withCapability = {
     ...PENDING,
     request: {
       ...PENDING.request,
       installedAppUrl: "vana-dev://continue?id=dcrcont_secret",
       installedAppExpiresAt: "2026-08-17T12:04:00.000Z",
+      installedAppFallbackUrl,
     },
   };
 
   assert.equal(savePendingAccessRequest(localStorage, withCapability, NOW), true);
   const raw = localStorage.getItem(PENDING_ACCESS_REQUEST_KEY) ?? "";
   assert.equal(raw.includes("dcrcont_secret"), false);
-  assert.deepEqual(loadPendingAccessRequest(localStorage, NOW), PENDING);
+  assert.deepEqual(loadPendingAccessRequest(localStorage, NOW), {
+    ...PENDING,
+    request: { ...PENDING.request, installedAppFallbackUrl },
+  });
 });
 
 test("rejects malformed, overbroad, and non-HTTP(S) pending request records", () => {
@@ -63,6 +68,7 @@ test("rejects malformed, overbroad, and non-HTTP(S) pending request records", ()
     "{",
     JSON.stringify({ version: 1, ...PENDING, extra: true }),
     JSON.stringify({ version: 1, mode: "deep", request: { ...PENDING.request, approvalUrl: "javascript:alert(1)" } }),
+    JSON.stringify({ version: 1, mode: "deep", request: { ...PENDING.request, installedAppFallbackUrl: "http://app.vana.org/mobile/install" } }),
     JSON.stringify({ version: 1, mode: "other", request: PENDING.request }),
   ]) {
     localStorage.setItem(PENDING_ACCESS_REQUEST_KEY, value);
