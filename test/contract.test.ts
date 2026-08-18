@@ -20,6 +20,13 @@ import {
   LOREBOOK_QUICK_APP,
 } from "../src/lib/vana/constants";
 import { mapClientError } from "../src/lib/vana/errors";
+import {
+  consumeForegroundDelivery,
+  createForegroundDelivery,
+  getDeliveredResult,
+  registerForegroundDelivery,
+  storeDeliveredResult,
+} from "../src/lib/vana/foreground-delivery";
 import { jsonNoStore, noStore } from "../src/lib/vana/response";
 import { buildHomePath, buildRequestPath } from "../src/lib/vana/request-path";
 import { resolveFixtureJourney, resolveLaunchRuntime } from "../src/lib/vana/runtime";
@@ -168,6 +175,58 @@ test("extends a request binding only when the access request outlives one hour",
   const decode = (binding: string) => JSON.parse(Buffer.from(binding.split(".")[0] ?? "", "base64url").toString("utf8")) as { expiresAt: number };
   assert.equal(decode(shortLived).expiresAt, 1_000 + 60 * 60 * 1_000);
   assert.equal(decode(longerLived).expiresAt, 3 * 60 * 60 * 1_000);
+});
+
+test("uses a one-time browser-bound foreground delivery capability", () => {
+  const delivery = createForegroundDelivery(ORIGIN);
+  assert.equal(delivery.url, `${ORIGIN}/api/vana/delivery`);
+  assert.match(delivery.token, /^[A-Za-z0-9_-]{43}$/);
+
+  const binding = {
+    version: 2 as const,
+    requestId: "dcr_delivery",
+    appId: LOREBOOK_DEEP_APP.id,
+    scopes: [...LOREBOOK_DEEP_APP.scopes],
+    returnOrigin: ORIGIN,
+    runtime: { env: "production", network: "mainnet" } as const,
+    expiresAt: 10_000,
+  };
+  registerForegroundDelivery({
+    binding,
+    token: delivery.token,
+    builderAddress: `0x${"a".repeat(40)}`,
+    now: 1_000,
+  });
+  assert.equal(consumeForegroundDelivery({
+    requestId: binding.requestId,
+    token: delivery.token,
+    scopes: ["wrong.scope"],
+    builderAddress: `0x${"a".repeat(40)}`,
+    now: 1_001,
+  }), null);
+  assert.deepEqual(consumeForegroundDelivery({
+    requestId: binding.requestId,
+    token: delivery.token,
+    scopes: [...binding.scopes],
+    builderAddress: `0x${"a".repeat(40)}`,
+    now: 1_002,
+  }), binding);
+  assert.equal(consumeForegroundDelivery({
+    requestId: binding.requestId,
+    token: delivery.token,
+    scopes: [...binding.scopes],
+    builderAddress: `0x${"a".repeat(40)}`,
+    now: 1_003,
+  }), null);
+
+  const data = {
+    kind: "deep" as const,
+    conversations: { totalConversations: 1, totalMessages: 2, themes: [], recentTitles: [] },
+  };
+  storeDeliveredResult({ binding, scope: binding.scopes[0]!, data, now: 2_000 });
+  assert.deepEqual(getDeliveredResult(binding, 2_001), { scope: binding.scopes[0], data });
+  assert.equal(getDeliveredResult({ ...binding, returnOrigin: "https://evil.example" }, 2_001), null);
+  assert.equal(getDeliveredResult(binding, 2_000 + 5 * 60 * 1_000), null);
 });
 
 test("blocks reads until the grant covering all scopes is ready", () => {

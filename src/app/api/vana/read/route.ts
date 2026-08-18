@@ -1,6 +1,7 @@
 import { mapClientError } from "@/lib/vana/errors";
 import { getBoundVanaRequest, requestIdFromUrl } from "@/lib/vana/request";
 import { jsonNoStore } from "@/lib/vana/response";
+import { getDeliveredResult } from "@/lib/vana/foreground-delivery";
 import { readApprovedScopes } from "@/lib/vana/server";
 import { NextRequest } from "next/server";
 
@@ -20,6 +21,11 @@ export async function GET(request: NextRequest) {
         { kind: "unavailable", error: "This request is not available in this browser session." },
         { status: 403 },
       );
+    }
+
+    const delivered = getDeliveredResult(bound.binding);
+    if (delivered) {
+      return jsonNoStore(delivered);
     }
 
     // Read the one approved chapter and return its product-safe Lorebook model.

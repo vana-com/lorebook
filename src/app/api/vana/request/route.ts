@@ -1,9 +1,16 @@
-import { createRequestBinding, setRequestBindingCookie } from "@/lib/vana/binding";
+import {
+  createRequestBindingRecord,
+  setRequestBindingCookie,
+} from "@/lib/vana/binding";
 import {
   appForJourney,
   type LorebookJourney,
 } from "@/lib/vana/constants";
 import { mapClientError } from "@/lib/vana/errors";
+import {
+  createForegroundDelivery,
+  registerForegroundDelivery,
+} from "@/lib/vana/foreground-delivery";
 import { jsonNoStore, noStore } from "@/lib/vana/response";
 import {
   resolveFixtureJourney,
@@ -17,12 +24,20 @@ export async function POST(request: NextRequest) {
   try {
     const runtime = resolveLaunchRuntime(new URL(request.url).searchParams);
     const config = getVanaServerConfig();
-    const app = appForJourney(journeyFromUrl(request.url, runtime));
+    const journey = journeyFromUrl(request.url, runtime);
+    const app = appForJourney(journey);
     const controller = getVanaController(runtime, app, config);
+    const foregroundDelivery =
+      journey === "deep"
+        ? createForegroundDelivery(config.returnOrigin)
+        : undefined;
     // ONE access request for every scope → the approval mints ONE grant that
     // covers them all, so no later approval overwrites an earlier scope set.
-    const accessRequest = await controller.createAccessRequest({ returnUrl: config.returnUrl });
-    const binding = createRequestBinding(
+    const accessRequest = await controller.createAccessRequest({
+      returnUrl: config.returnUrl,
+      ...(foregroundDelivery ? { foregroundDelivery } : {}),
+    });
+    const binding = createRequestBindingRecord(
       {
         requestId: accessRequest.requestId,
         app,
@@ -32,11 +47,18 @@ export async function POST(request: NextRequest) {
       },
       config.appPrivateKey,
     );
+    if (foregroundDelivery) {
+      registerForegroundDelivery({
+        binding: binding.payload,
+        token: foregroundDelivery.token,
+        builderAddress: controller.getAppAddress(),
+      });
+    }
     const response = noStore(NextResponse.json(accessRequest));
     setRequestBindingCookie(
       response.cookies,
       accessRequest.requestId,
-      binding,
+      binding.value,
       process.env.NODE_ENV === "production",
     );
     return response;

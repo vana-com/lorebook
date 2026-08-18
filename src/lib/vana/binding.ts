@@ -15,6 +15,15 @@ export type RequestBinding = {
   expiresAt: number;
 };
 
+type RequestBindingInput = {
+  requestId: string;
+  app: VanaAppDefinition;
+  runtime: VanaRuntime;
+  returnOrigin: string;
+  accessRequestExpiresAt?: string;
+  now?: number;
+};
+
 type CookieReader = {
   get(name: string): { value: string } | undefined;
 };
@@ -38,16 +47,16 @@ export function requestBindingCookieName(requestId: string): string {
 }
 
 export function createRequestBinding(
-  input: {
-    requestId: string;
-    app: VanaAppDefinition;
-    runtime: VanaRuntime;
-    returnOrigin: string;
-    accessRequestExpiresAt?: string;
-    now?: number;
-  },
+  input: RequestBindingInput,
   secret: string,
 ): string {
+  return createRequestBindingRecord(input, secret).value;
+}
+
+export function createRequestBindingRecord(
+  input: RequestBindingInput,
+  secret: string,
+): { payload: RequestBinding; value: string } {
   const now = input.now ?? Date.now();
   const accessRequestExpiresAt = input.accessRequestExpiresAt ? Date.parse(input.accessRequestExpiresAt) : Number.NaN;
   const payload: RequestBinding = {
@@ -65,7 +74,7 @@ export function createRequestBinding(
       : now + REQUEST_BINDING_TTL_MS,
   };
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${encoded}.${sign(encoded, secret)}`;
+  return { payload, value: `${encoded}.${sign(encoded, secret)}` };
 }
 
 export function setRequestBindingCookie(

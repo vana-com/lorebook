@@ -19,9 +19,11 @@ Both journeys use the same browser-facing Vana SDK flow:
 2. It opens the HTTPS approval URL returned by Vana.
 3. Vana decides where the request can be completed.
 4. Lorebook polls the same request until the approved data is ready.
-5. Lorebook reads from the user's Personal Server and acknowledges the read.
+5. Desktop/light reads use the normal browser path. Mobile-deep reads are delivered to Lorebook's
+   authenticated foreground callback while Vana Mobile still exposes the Personal Server.
 
-Lorebook does not contain a Vana deep link, delivery endpoint, connector, or platform detector.
+Lorebook contains no platform detector or Vana deep link. For deep requests only, its server adds
+one fixed same-origin `/api/vana/delivery` URL and a one-time 32-byte bearer to DCR metadata.
 
 ### Hidden Desktop collection fixture
 
@@ -84,8 +86,15 @@ The private key stays server-side. Browser request bindings are signed, HttpOnly
 least the one-hour window used by the data connection request, so the originating tab keeps the
 authorization it needs to poll status and read for the whole request lifetime.
 
-Lorebook stores no pending request. The originating tab owns the entire flow — create, poll, read,
-and acknowledge. On mobile-deep requests the SDK returns one `mobileContinuationUrl` after the DCR
+Lorebook stores no browser pending request. The originating tab owns create and poll. For a
+mobile-deep request, Lorebook registers a one-time bearer in a bounded process-local server cache;
+the delivery callback reads and maps the foreground Personal Server result, acknowledges the DCR,
+and retains only the product-safe snapshot for five minutes. Status/read serve that browser-bound
+snapshot, so no Personal Server remains necessary after delivery. This proving cache requires one
+long-lived Lorebook server process (or sticky routing); it is intentionally not suitable for a
+multi-instance/serverless production deployment without shared ephemeral storage.
+
+On mobile-deep requests the SDK returns one `mobileContinuationUrl` after the DCR
 is created, and Lorebook renders a single explicit **Open Vana** link (`target="_blank"`,
 `rel="noreferrer"`) that opens Vana in a separate context while this tab keeps polling. The link is
 never launched automatically: asynchronous DCR creation cannot retain the original tap's iOS user

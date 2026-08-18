@@ -130,6 +130,66 @@ export async function readApprovedScopes(
   return { scope: status.scope ?? scope, data: snapshot };
 }
 
+/** Read using foreground routing supplied by Vana Mobile, then acknowledge. */
+export async function readForegroundDeliveredScopes(
+  runtime: VanaRuntime,
+  app: VanaAppDefinition,
+  config: VanaServerConfig,
+  input: {
+    requestId: string;
+    personalServerUrl: string;
+    grantId: string;
+    scopes: string[];
+  },
+): Promise<{ scope: string; data: LorebookSnapshot }> {
+  if (
+    app.scopes.length !== 1 ||
+    input.scopes.length !== 1 ||
+    input.scopes[0] !== app.scopes[0]
+  ) {
+    throw new PersonalServerReadError("Lorebook requires its exact approved data type.", 400);
+  }
+  const scope = input.scopes[0];
+  const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
+  const chainId = chainIdForNetwork(runtime.network);
+  const endpoints = getDirectEndpoints(runtime.env);
+  const escrow: EscrowPaymentConfig = {
+    client: createEscrowGatewayClient(endpoints.escrowGatewayUrl),
+    escrowContract: CONTRACTS.DataPortabilityEscrow.addresses[chainId],
+    chainId,
+    signTypedData: account.signTypedData,
+  };
+  const result = await readPersonalServerData({
+    personalServerUrl: input.personalServerUrl,
+    scope,
+    grantId: input.grantId,
+    payerAddress: account.address,
+    signMessage: (message: string) => account.signMessage({ message }),
+    escrow,
+  });
+  const data = mapLorebookSnapshot(app, scope, result.data);
+  try {
+    await acknowledgeRead(input.requestId, account, endpoints);
+  } catch (error) {
+    console.warn(`[vana/delivery] acknowledgeRead failed for ${input.requestId}`, error);
+  }
+  return { scope, data };
+}
+
+async function acknowledgeRead(
+  requestId: string,
+  account: ReturnType<typeof privateKeyToAccount>,
+  endpoints: ReturnType<typeof getDirectEndpoints>,
+): Promise<void> {
+  const accessRequestClient = createDefaultAccessRequestClient({
+    baseUrl: endpoints.accessRequestBaseUrl,
+    approvalBaseUrl: endpoints.approvalAppBaseUrl,
+    appAddress: account.address,
+    signMessage: (message: string) => account.signMessage({ message }),
+  });
+  await accessRequestClient.acknowledgeRead?.(requestId);
+}
+
 // Protocol chain id per network: Vana mainnet 1480, Moksha testnet 14800 —
 // the keys present in CONTRACTS.*.addresses.
 function chainIdForNetwork(network: VanaRuntime["network"]): 1480 | 14800 {

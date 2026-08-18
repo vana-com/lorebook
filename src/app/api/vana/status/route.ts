@@ -2,6 +2,7 @@ import { mapClientError } from "@/lib/vana/errors";
 import { assertGrantReadReady } from "@/lib/vana/capability";
 import { getBoundVanaRequest, requestIdFromUrl } from "@/lib/vana/request";
 import { jsonNoStore } from "@/lib/vana/response";
+import { getDeliveredResult } from "@/lib/vana/foreground-delivery";
 import { NextRequest } from "next/server";
 
 export async function GET(request: NextRequest) {
@@ -20,6 +21,10 @@ export async function GET(request: NextRequest) {
         { kind: "unavailable", error: "This request is not available in this browser session." },
         { status: 403 },
       );
+    }
+
+    if (getDeliveredResult(bound.binding)) {
+      return jsonNoStore({ status: "ready_for_read" });
     }
 
     const status = await bound.controller.getAccessRequestStatus(requestId);
