@@ -46,6 +46,15 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
 .privacy-note { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-soft); font-size: 13px; }
 .privacy-note svg { width: 18px; height: 18px; }
 
+/* Dev affordance: which Vana runtime this tab is driving. */
+.network-switch { display: inline-flex; align-items: center; gap: 9px; margin: 12px 0 -6px; padding: 5px 12px 5px 13px; border-radius: 999px; color: var(--moss); background: rgba(46, 90, 69, 0.09); box-shadow: inset 0 0 0 1px rgba(46, 90, 69, 0.24); }
+.network-switch.mainnet { color: var(--berry); background: rgba(162, 72, 98, 0.09); box-shadow: inset 0 0 0 1px rgba(162, 72, 98, 0.28); }
+.network-switch.pending, .network-switch.custom { color: var(--ink-soft); background: rgba(32, 37, 30, 0.06); box-shadow: inset 0 0 0 1px rgba(32, 37, 30, 0.16); }
+.network-switch label { font-size: 11px; font-weight: 750; letter-spacing: 0.13em; text-transform: uppercase; }
+.network-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: currentColor; }
+.network-switch select { min-height: 34px; max-width: 190px; padding: 0 4px; border: 0; border-radius: 10px; color: inherit; background: transparent; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.network-switch select:disabled { cursor: default; opacity: 0.75; }
+
 .hero { max-width: 850px; padding: 88px 0 68px; }
 .kicker, .chapter-eyebrow, .result-label, .section-heading p { font-size: 11px; font-weight: 750; letter-spacing: 0.13em; text-transform: uppercase; }
 .kicker { color: var(--berry); margin-bottom: 20px; }

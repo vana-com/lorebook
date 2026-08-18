@@ -9,8 +9,14 @@ import {
 import { useEffect, useState } from "react";
 import type { LorebookSnapshot } from "@/lib/combined-snapshot";
 import { type LorebookJourney, type LorebookMode } from "@/lib/vana/constants";
-import { buildRequestPath } from "@/lib/vana/request-path";
-import { resolveFixtureJourney, resolveLaunchRuntime, type VanaRuntime } from "@/lib/vana/runtime";
+import { buildRequestPath, buildRuntimeSwitchPath } from "@/lib/vana/request-path";
+import {
+  resolveFixtureJourney,
+  resolveLaunchRuntime,
+  runtimeOptionId,
+  RUNTIME_OPTIONS,
+  type VanaRuntime,
+} from "@/lib/vana/runtime";
 
 type ErrorBody = { error?: unknown };
 
@@ -77,6 +83,8 @@ export function LorebookApp() {
 
   return (
     <main className="lorebook-shell">
+      <NetworkSwitch />
+
       <header className="site-header">
         <span className="brand">
           <LogoMark />
@@ -147,6 +155,58 @@ export function LorebookApp() {
         <p>Built to be curious, never nosy.</p>
       </footer>
     </main>
+  );
+}
+
+/**
+ * Dev affordance. Lorebook defaults to production + mainnet when the URL says
+ * nothing, so testers on the bare URL silently drive production. Changing the
+ * runtime is a full navigation on purpose: the SDK controller is keyed by
+ * env/network, so every in-memory flow state must be dropped with it.
+ */
+function NetworkSwitch() {
+  const [runtime, setRuntime] = useState<VanaRuntime | "invalid" | null>(null);
+  const [journey, setJourney] = useState<LorebookJourney | undefined>(undefined);
+
+  useEffect(() => {
+    const search = window.location.search;
+    try {
+      setRuntime(resolveLaunchRuntime(new URLSearchParams(search)));
+    } catch {
+      setRuntime("invalid");
+    }
+    if (isDesktopFixtureSearch(search)) setJourney("desktop-saved-tracks");
+  }, []);
+
+  const selected = runtime && runtime !== "invalid" ? runtimeOptionId(runtime) : null;
+  const tone = runtime === null ? "pending" : selected ?? "custom";
+  const offMenu =
+    runtime === "invalid"
+      ? "Invalid URL"
+      : runtime && selected === null
+        ? `${runtime.env} · ${runtime.network}`
+        : null;
+
+  return (
+    <div className={`network-switch ${tone}`} data-testid="network-switch">
+      <span className="network-dot" aria-hidden="true" />
+      <label htmlFor="network-switch-select">Network</label>
+      <select
+        id="network-switch-select"
+        value={selected ?? ""}
+        disabled={runtime === null}
+        onChange={(event) => {
+          const next = RUNTIME_OPTIONS.find((option) => option.id === event.target.value);
+          if (next) window.location.assign(buildRuntimeSwitchPath(next.runtime, journey));
+        }}
+      >
+        {runtime === null ? <option value="">Checking…</option> : null}
+        {offMenu ? <option value="">{offMenu}</option> : null}
+        {RUNTIME_OPTIONS.map((option) => (
+          <option key={option.id} value={option.id}>{option.label}</option>
+        ))}
+      </select>
+    </div>
   );
 }
 

@@ -8,6 +8,26 @@ export type VanaRuntime = {
   network: "moksha" | "mainnet";
 };
 
+/** The two runtime pairings Lorebook is exercised against, as testers see them. */
+export type RuntimeOptionId = "testnet" | "mainnet";
+
+export const RUNTIME_OPTIONS: readonly {
+  id: RuntimeOptionId;
+  label: string;
+  runtime: VanaRuntime;
+}[] = [
+  { id: "testnet", label: "Testnet", runtime: { env: "dev", network: "moksha" } },
+  { id: "mainnet", label: "Mainnet", runtime: { env: "production", network: "mainnet" } },
+];
+
+/** The option a resolved runtime maps to, or null for an off-menu pairing. */
+export function runtimeOptionId(runtime: VanaRuntime): RuntimeOptionId | null {
+  const match = RUNTIME_OPTIONS.find(
+    (option) => option.runtime.env === runtime.env && option.runtime.network === runtime.network,
+  );
+  return match ? match.id : null;
+}
+
 export class LaunchRuntimeError extends Error {
   constructor(message: string) {
     super(message);

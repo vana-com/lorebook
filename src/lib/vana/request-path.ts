@@ -30,3 +30,16 @@ export function buildHomePath(runtime: VanaRuntime, journey?: LorebookJourney): 
   const query = params.toString();
   return query ? `/?${query}` : "/";
 }
+
+/**
+ * Target of the network selector. The Desktop fixture is only legal on
+ * dev + Moksha, so it is carried across a switch only when it stays legal.
+ */
+export function buildRuntimeSwitchPath(
+  runtime: VanaRuntime,
+  journey?: LorebookJourney,
+): string {
+  const keepsFixture =
+    journey === "desktop-saved-tracks" && runtime.env === "dev" && runtime.network === "moksha";
+  return buildHomePath(runtime, keepsFixture ? journey : undefined);
+}

@@ -28,8 +28,17 @@ import {
   storeDeliveredResult,
 } from "../src/lib/vana/foreground-delivery";
 import { jsonNoStore, noStore } from "../src/lib/vana/response";
-import { buildHomePath, buildRequestPath } from "../src/lib/vana/request-path";
-import { resolveFixtureJourney, resolveLaunchRuntime } from "../src/lib/vana/runtime";
+import {
+  buildHomePath,
+  buildRequestPath,
+  buildRuntimeSwitchPath,
+} from "../src/lib/vana/request-path";
+import {
+  resolveFixtureJourney,
+  resolveLaunchRuntime,
+  runtimeOptionId,
+  RUNTIME_OPTIONS,
+} from "../src/lib/vana/runtime";
 
 const SECRET = `0x${"1".repeat(64)}`;
 const ORIGIN = "https://snapshot.example";
@@ -82,6 +91,35 @@ test("forwards only the deployment runtime selectors to request creation", () =>
     buildHomePath({ env: "dev", network: "moksha" }, "desktop-saved-tracks"),
     "/?vana_env=dev&network=moksha&fixture=spotify-saved-tracks",
   );
+});
+
+test("maps every network selector option to its canonical launch URL", () => {
+  assert.deepEqual(
+    RUNTIME_OPTIONS.map((option) => [option.id, buildRuntimeSwitchPath(option.runtime)]),
+    [
+      ["testnet", "/?vana_env=dev&network=moksha"],
+      ["mainnet", "/"],
+    ],
+  );
+
+  // The selector round-trips: the URL an option produces resolves back to it.
+  for (const option of RUNTIME_OPTIONS) {
+    const href = buildRuntimeSwitchPath(option.runtime);
+    const search = href.split("?")[1] ?? "";
+    assert.equal(runtimeOptionId(resolveLaunchRuntime(new URLSearchParams(search))), option.id);
+  }
+  assert.equal(runtimeOptionId({ env: "dev", network: "mainnet" }), null);
+
+  // The Desktop fixture rides along only where it stays legal.
+  assert.equal(
+    buildRuntimeSwitchPath({ env: "dev", network: "moksha" }, "desktop-saved-tracks"),
+    "/?vana_env=dev&network=moksha&fixture=spotify-saved-tracks",
+  );
+  assert.equal(
+    buildRuntimeSwitchPath({ env: "production", network: "mainnet" }, "desktop-saved-tracks"),
+    "/",
+  );
+  assert.equal(buildRuntimeSwitchPath({ env: "dev", network: "moksha" }, "quick"), "/?vana_env=dev&network=moksha");
 });
 
 test("enables the Desktop fixture only with explicit dev and Moksha guards", () => {
