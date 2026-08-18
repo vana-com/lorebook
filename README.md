@@ -80,11 +80,18 @@ This local E2E checkout intentionally links `@opendatalabs/vana-sdk` to the adja
 branch with its `dist` built. Lorebook is not independently deployable with this file dependency;
 switch back to a published SDK release before deployment.
 
-The private key stays server-side. Browser request bindings are signed, HttpOnly, and valid for the
-same one-hour window used by the data connection request so an app installation can finish without
-silently losing the originating request. The browser also retains only a versioned, non-secret
-pending request and selected chapter in local storage until that request completes, is reset, or expires;
-this lets the same request resume after a Vana app switch without creating another request.
+The private key stays server-side. Browser request bindings are signed, HttpOnly, and valid for at
+least the one-hour window used by the data connection request, so the originating tab keeps the
+authorization it needs to poll status and read for the whole request lifetime.
+
+Lorebook stores no pending request. The originating tab owns the entire flow — create, poll, read,
+and acknowledge. On mobile-deep requests the SDK returns one `mobileContinuationUrl` after the DCR
+is created, and Lorebook renders a single explicit **Open Vana** link (`target="_blank"`,
+`rel="noreferrer"`) that opens Vana in a separate context while this tab keeps polling. The link is
+never launched automatically: asynchronous DCR creation cannot retain the original tap's iOS user
+activation, so the user performs one deliberate tap. If the originating tab is reloaded or evicted
+the flow does not resume — the user restarts and the abandoned DCR expires. This restart-on-tab-loss
+behavior is an accepted first-release tradeoff.
 
 ## Verification
 
@@ -94,9 +101,12 @@ pnpm typecheck
 pnpm build
 ```
 
-For a full handoff proof, test each journey from both a desktop browser and a mobile browser. A
-successful deep test is not complete until Lorebook resumes, reads the approved data, and Vana
-records the consumer acknowledgment.
+For a full handoff proof, test each journey from both a desktop browser and a mobile browser over
+HTTPS only — the mobile-deep continuation is an `https://open[-dev].vana.org/continue#<ticket>` URL
+delivered by iOS Universal Links / Android App Links, so a plain `http://` origin cannot exercise
+it. A successful deep test is not complete until the originating tab reads the approved data and
+Vana records the consumer acknowledgment. On mobile a reloaded or evicted originating tab restarts
+rather than resumes.
 
 ## License
 

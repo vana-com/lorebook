@@ -6,15 +6,9 @@ import {
   type AccessRequestStatus,
   type ApprovedDataResult,
 } from "@opendatalabs/vana-sdk/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { LorebookSnapshot } from "@/lib/combined-snapshot";
 import { type LorebookJourney, type LorebookMode } from "@/lib/vana/constants";
-import {
-  clearPendingAccessRequest,
-  clearPendingAccessRequestForTerminalStatus,
-  loadPendingAccessRequest,
-  savePendingAccessRequest,
-} from "@/lib/vana/pending-access-request";
 import { buildRequestPath } from "@/lib/vana/request-path";
 import { resolveFixtureJourney, resolveLaunchRuntime, type VanaRuntime } from "@/lib/vana/runtime";
 
@@ -40,6 +34,12 @@ const CHAPTERS: Record<
   },
 };
 
+// In-flight states that lock the chapter picker while a request is running.
+const WAITING_STATES = ["creating", "ready_to_open", "awaiting_approval", "reading"];
+// States that render the disabled progress button. `ready_to_open` is excluded:
+// there the explicit "Open Vana" link is the primary affordance, not a spinner.
+const SPINNER_STATES = ["creating", "awaiting_approval", "reading"];
+
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   if (!response.ok) {
@@ -52,57 +52,29 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function LorebookApp() {
   const [mode, setMode] = useState<LorebookJourney>("quick");
-  const [resumeReady, setResumeReady] = useState(false);
-  const didResume = useRef(false);
   const connect = useDirectVanaConnect<LorebookSnapshot>({
     createRequest: () => jsonFetch<AccessRequest>(buildRequestPath(mode, window.location.search), { method: "POST" }),
-    getStatus: async (requestId) => {
-      const status = await jsonFetch<AccessRequestStatus>(`/api/vana/status?requestId=${encodeURIComponent(requestId)}`);
-      clearPendingAccessRequestForTerminalStatus(window.localStorage, status);
-      return status;
-    },
+    getStatus: (requestId) =>
+      jsonFetch<AccessRequestStatus>(`/api/vana/status?requestId=${encodeURIComponent(requestId)}`),
     readResult: (requestId) =>
       jsonFetch<ApprovedDataResult<LorebookSnapshot>>(
         `/api/vana/read?requestId=${encodeURIComponent(requestId)}`,
       ),
   });
   const data = connect.state.type === "done" ? connect.state.result.data : null;
-  const busy = ["creating", "awaiting_approval", "reading"].includes(connect.state.type);
+  const busy = WAITING_STATES.includes(connect.state.type);
 
+  // The originating tab owns the whole flow: create → status poll → read → ack.
+  // Nothing is persisted, so if this tab is reloaded or evicted the flow does
+  // not resume; the user restarts and the abandoned DCR expires. The only
+  // launch-time concern here is surfacing the hidden Desktop QA fixture.
   useEffect(() => {
-    const fixtureEnabled = isDesktopFixtureSearch(window.location.search);
-    const pending = loadPendingAccessRequest(window.localStorage);
-    const canResume = pending?.mode !== "desktop-saved-tracks" || fixtureEnabled;
-    if (pending && canResume && !didResume.current) {
-      didResume.current = true;
-      setMode(pending.mode);
-      connect.resume(pending.request);
-    } else if (pending && !canResume) {
-      clearPendingAccessRequest(window.localStorage);
-    } else if (fixtureEnabled) {
-      setMode("desktop-saved-tracks");
-    }
-    setResumeReady(true);
-  }, [connect.resume]);
-
-  useEffect(() => {
-    if (!resumeReady) return;
-    const state = connect.state;
-    if (state.type === "awaiting_approval" || state.type === "reading") {
-      savePendingAccessRequest(window.localStorage, { mode, request: state.request });
-    } else if (state.type === "done" || state.type === "idle") {
-      clearPendingAccessRequest(window.localStorage);
-    } else if (state.type === "error") {
-      // Keep a valid request for transient status/read failures, but loading it
-      // revalidates the authoritative expiry and clears it when it elapsed.
-      loadPendingAccessRequest(window.localStorage);
-    }
-  }, [connect.state, mode, resumeReady]);
+    if (isDesktopFixtureSearch(window.location.search)) setMode("desktop-saved-tracks");
+  }, []);
 
   function chooseMode(next: LorebookMode) {
     if (next === mode || busy) return;
     connect.reset();
-    clearPendingAccessRequest(window.localStorage);
     setMode(next);
   }
 
@@ -170,7 +142,7 @@ export function LorebookApp() {
           <div className="portrait-card">
             {data ? <LoreResult data={data} /> : <EmptyPortrait mode={mode} />}
           </div>
-          <ConnectAction connect={connect} mode={mode} onReset={() => clearPendingAccessRequest(window.localStorage)} />
+          <ConnectAction connect={connect} mode={mode} />
         </div>
       </section>
 
@@ -257,50 +229,36 @@ function Metric({ value, label }: { value: number | null; label: string }) {
   return <div className="metric"><strong>{value == null ? "—" : value.toLocaleString()}</strong><span>{label}</span></div>;
 }
 
-function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>; mode: LorebookJourney; onReset: () => void }) {
+function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>; mode: LorebookJourney }) {
   const state = connect.state;
-  const popupBlocked = state.type === "awaiting_approval" && state.popupBlocked;
-  const installedAppAvailable =
-    state.type === "awaiting_approval" && state.request.installedAppUrl !== undefined;
-  const reopenAppAvailable =
-    state.type === "awaiting_approval" && state.request.installedAppReopenUrl !== undefined;
-  const installFallbackAvailable =
-    state.type === "awaiting_approval" && state.request.installedAppFallbackUrl !== undefined;
-  const recoveryAvailable =
-    popupBlocked || installedAppAvailable || reopenAppAvailable || installFallbackAvailable;
-  const recoveryPrompt = installedAppAvailable || reopenAppAvailable
-    ? "open"
-    : installFallbackAvailable
-      ? "install"
-      : popupBlocked
-        ? "approval"
-        : null;
+  // Mobile-deep: after asynchronous DCR creation the SDK exposes the single
+  // continuation URL. The original click's iOS user activation cannot be
+  // trusted across the await, so it is never launched automatically — the user
+  // taps one explicit primary link that opens Vana in a separate context while
+  // this tab keeps polling.
+  const mobileContinuationUrl =
+    state.type === "ready_to_open" ? state.mobileContinuationUrl : null;
+  // Desktop/light: preserve the synchronous popup contract. When the popup is
+  // blocked, surface the universal HTTPS approval URL as manual recovery.
+  const approvalRecoveryUrl =
+    state.type === "awaiting_approval" && state.popupBlocked ? state.request.approvalUrl : null;
+
   if (state.type === "done") {
-    return <button className="secondary-button" type="button" onClick={() => { onReset(); connect.reset(); }}>Write another page</button>;
+    return <button className="secondary-button" type="button" onClick={() => connect.reset()}>Write another page</button>;
   }
 
   return (
     <div className="connect-action" aria-live="polite">
-      <p>{statusCopy(state.type, recoveryPrompt, mode)}</p>
-      {state.type === "awaiting_approval" && recoveryAvailable ? (
-        <div className="approval-recovery">
-          {installedAppAvailable ? (
-            <button className="secondary-button" type="button" onClick={() => connect.retryOpen()}>Open Vana</button>
-          ) : null}
-          {!installedAppAvailable && reopenAppAvailable ? (
-            <a className="secondary-button" href={state.request.installedAppReopenUrl}>Open Vana</a>
-          ) : null}
-          {installFallbackAvailable ? (
-            <a className="secondary-button" href={state.request.installedAppFallbackUrl} target="_blank" rel="noreferrer">Install Vana</a>
-          ) : null}
-          <a className="secondary-button" href={state.request.approvalUrl} target="_blank" rel="noreferrer">
-            {installedAppAvailable || reopenAppAvailable || installFallbackAvailable ? "Continue on the web" : "Open Vana approval"}
-          </a>
-        </div>
+      <p>{statusCopy(state.type, Boolean(mobileContinuationUrl), Boolean(approvalRecoveryUrl), mode)}</p>
+      {mobileContinuationUrl ? (
+        <a className="primary-button" href={mobileContinuationUrl} target="_blank" rel="noreferrer">Open Vana<ArrowIcon /></a>
+      ) : null}
+      {approvalRecoveryUrl ? (
+        <a className="secondary-button" href={approvalRecoveryUrl} target="_blank" rel="noreferrer">Open Vana approval</a>
       ) : null}
       {state.type === "idle" ? <button className="primary-button" type="button" onClick={() => void connect.start()}>{mode === "quick" ? "Read my public rhythm" : mode === "desktop-saved-tracks" ? "Import my liked songs" : "Map my curiosities"}<ArrowIcon /></button> : null}
-      {["creating", "awaiting_approval", "reading"].includes(state.type) ? <button className="primary-button loading" type="button" disabled><span className="spinner" />{state.type === "reading" ? "Writing your page…" : "Waiting for Vana…"}</button> : null}
-      {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { onReset(); connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
+      {SPINNER_STATES.includes(state.type) ? <button className="primary-button loading" type="button" disabled><span className="spinner" />{state.type === "reading" ? "Writing your page…" : "Waiting for Vana…"}</button> : null}
+      {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
       <details className="connection-details">
         <summary>Connection details</summary>
         <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div><RuntimeDetails /></dl>
@@ -309,10 +267,9 @@ function ConnectAction({ connect, mode, onReset }: { connect: ReturnType<typeof 
   );
 }
 
-function statusCopy(type: string, recoveryPrompt: "open" | "install" | "approval" | null, mode: LorebookJourney): string {
-  if (recoveryPrompt === "open") return "Vana is ready. Open it to review this request.";
-  if (recoveryPrompt === "install") return "Install Vana to review this request, or continue on the web.";
-  if (recoveryPrompt === "approval") return "Vana approval is ready. Open it to continue.";
+function statusCopy(type: string, hasMobileContinuation: boolean, hasApprovalRecovery: boolean, mode: LorebookJourney): string {
+  if (hasMobileContinuation) return "Open Vana to review this request, then come back to this tab.";
+  if (hasApprovalRecovery) return "Vana approval is ready. Open it to continue.";
   if (type === "idle") return mode === "quick" ? "We’ll ask for your Spotify profile—nothing more." : mode === "desktop-saved-tracks" ? "We’ll ask Vana Desktop for your Spotify saved tracks." : "We’ll ask for your ChatGPT conversations and summarize patterns locally.";
   if (type === "creating") return "Opening a private data request…";
   if (type === "awaiting_approval") return "Approve the request in Vana, then come back here.";

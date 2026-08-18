@@ -58,8 +58,8 @@ export function createRequestBinding(
     returnOrigin: input.returnOrigin,
     runtime: input.runtime,
     // The normal one-hour binding is retained unless the authoritative access
-    // request expiry lasts longer, in which case the same browser may need the
-    // binding to resume and read that request after an app handoff.
+    // request expiry lasts longer, in which case the originating tab keeps the
+    // binding it needs to authorize status/read for the whole DCR lifetime.
     expiresAt: Number.isFinite(accessRequestExpiresAt)
       ? Math.max(now + REQUEST_BINDING_TTL_MS, accessRequestExpiresAt)
       : now + REQUEST_BINDING_TTL_MS,

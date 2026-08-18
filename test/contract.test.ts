@@ -20,7 +20,7 @@ import {
   LOREBOOK_QUICK_APP,
 } from "../src/lib/vana/constants";
 import { mapClientError } from "../src/lib/vana/errors";
-import { jsonNoStore } from "../src/lib/vana/response";
+import { jsonNoStore, noStore } from "../src/lib/vana/response";
 import { buildHomePath, buildRequestPath } from "../src/lib/vana/request-path";
 import { resolveFixtureJourney, resolveLaunchRuntime } from "../src/lib/vana/runtime";
 
@@ -277,6 +277,37 @@ test("maps SDK and unknown failures to sanitized client errors", () => {
     error: "The Vana request failed.",
     status: 500,
   });
+});
+
+test("forwards the simplified Direct create response with one mobile continuation URL", async () => {
+  // The create route (`/api/vana/request`) hands the SDK's AccessRequest to the
+  // browser verbatim as a no-store body. This proves the single mobile-URL
+  // contract at the lorebook boundary: `mobileContinuationUrl` passes through
+  // untouched and the removed installed-app taxonomy never reappears. It binds
+  // only to the wire shape, so it survives SDK connect-flow refactors.
+  const accessRequest = {
+    requestId: "dcr_mobile_deep",
+    approvalUrl: "https://app-dev.vana.org/approve/dcr_mobile_deep",
+    appAddress: "0xapp",
+    network: "moksha" as const,
+    expiresAt: "2026-08-18T13:00:00.000Z",
+    mobileContinuationUrl: "https://open-dev.vana.org/continue#ticket_abc123",
+  };
+
+  const response = noStore(Response.json(accessRequest));
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+
+  const body = (await response.json()) as Record<string, unknown>;
+  assert.deepEqual(body, accessRequest);
+  assert.equal(body.mobileContinuationUrl, accessRequest.mobileContinuationUrl);
+  for (const removed of [
+    "installedAppUrl",
+    "installedAppExpiresAt",
+    "installedAppFallbackUrl",
+    "installedAppReopenUrl",
+  ]) {
+    assert.equal(Object.hasOwn(body, removed), false, `${removed} must not survive the cutover`);
+  }
 });
 
 test("marks JSON responses as non-cacheable", async () => {
