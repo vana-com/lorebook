@@ -34,8 +34,6 @@ const CHAPTERS: Record<
   },
 };
 
-// In-flight states that lock the chapter picker while a request is running.
-const WAITING_STATES = ["creating", "ready_to_open", "awaiting_approval", "reading"];
 // States that render the disabled progress button. `ready_to_open` is excluded:
 // there the explicit "Open Vana" link is the primary affordance, not a spinner.
 const SPINNER_STATES = ["creating", "awaiting_approval", "reading"];
@@ -62,7 +60,6 @@ export function LorebookApp() {
       ),
   });
   const data = connect.state.type === "done" ? connect.state.result.data : null;
-  const busy = WAITING_STATES.includes(connect.state.type);
 
   // The originating tab owns the whole flow: create → status poll → read → ack.
   // Nothing is persisted, so if this tab is reloaded or evicted the flow does
@@ -73,7 +70,7 @@ export function LorebookApp() {
   }, []);
 
   function chooseMode(next: LorebookMode) {
-    if (next === mode || busy) return;
+    if (next === mode) return;
     connect.reset();
     setMode(next);
   }
@@ -121,7 +118,6 @@ export function LorebookApp() {
                   type="button"
                   key={chapterMode}
                   onClick={() => chooseMode(chapterMode)}
-                  disabled={busy}
                   aria-pressed={selected}
                 >
                   <span className="chapter-radio" aria-hidden="true"><span /></span>
