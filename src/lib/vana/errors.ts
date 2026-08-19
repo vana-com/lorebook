@@ -4,6 +4,7 @@ import {
   PaymentRequiredError,
   PersonalServerReadError,
 } from "@opendatalabs/vana-sdk/server";
+import { DeliveryStoreError } from "./delivery-store";
 import { LaunchRuntimeError } from "./runtime";
 
 export type ClientErrorKind =
@@ -35,6 +36,13 @@ export function mapClientError(error: unknown): ClientError {
       kind: "not_ready",
       error: "The approved data is not ready to read.",
       status: 409,
+    };
+  }
+  if (error instanceof DeliveryStoreError) {
+    return {
+      kind: "unavailable",
+      error: "The mobile delivery store is unavailable. Retry in a moment.",
+      status: 503,
     };
   }
   if (error instanceof PersonalServerReadError || hasNetworkError(error)) {

@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const delivered = getDeliveredResult(bound.binding);
+    const delivered = await getDeliveredResult(bound.binding);
     if (delivered) {
       return jsonNoStore(delivered);
     }

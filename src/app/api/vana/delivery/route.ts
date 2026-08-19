@@ -26,26 +26,40 @@ export async function POST(request: NextRequest) {
   }
 
   const config = getVanaServerConfig();
-  const registration = consumeForegroundDelivery({
+  const consumed = await consumeForegroundDelivery({
     requestId: body.requestId,
     token,
     scopes: body.scopes,
     builderAddress: body.builderAddress,
   });
-  if (!registration) {
+  // The phone always sees the same opaque refusal; the reason is logged, never
+  // returned, so a caller cannot probe which check it failed.
+  if (!consumed.ok) {
+    console.warn(
+      `[vana/delivery] rejected requestId=${body.requestId} reason=${consumed.reason}`,
+    );
     return jsonNoStore({ delivered: false }, { status: 403 });
   }
-  const app = appForId(registration.appId);
-  if (!app) return jsonNoStore({ delivered: false }, { status: 403 });
+  const binding = consumed.binding;
+  const app = appForId(binding.appId);
+  if (!app) {
+    console.warn(
+      `[vana/delivery] rejected requestId=${body.requestId} reason=unknown_app app=${binding.appId}`,
+    );
+    return jsonNoStore({ delivered: false }, { status: 403 });
+  }
 
   try {
     const result = await readForegroundDeliveredScopes(
-      registration.runtime,
+      binding.runtime,
       app,
       config,
       body,
     );
-    storeDeliveredResult({ binding: registration, ...result });
+    await storeDeliveredResult({ binding, ...result });
+    console.info(
+      `[vana/delivery] delivered requestId=${body.requestId} scope=${result.scope}`,
+    );
     return jsonNoStore({ delivered: true });
   } catch (error) {
     console.error(`[vana/delivery] Delivery failed for ${body.requestId}`, error);

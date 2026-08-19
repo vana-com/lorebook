@@ -48,11 +48,20 @@ export async function POST(request: NextRequest) {
       config.appPrivateKey,
     );
     if (foregroundDelivery) {
-      registerForegroundDelivery({
+      // Registered before the response so a store failure fails the request
+      // loudly here. Handing the browser a DCR whose bearer was never stored
+      // would strand the phone on a 403 it cannot explain; the abandoned DCR
+      // expires and the user simply retries.
+      await registerForegroundDelivery({
         binding: binding.payload,
         token: foregroundDelivery.token,
         builderAddress: controller.getAppAddress(),
       });
+      console.info(
+        `[vana/delivery] registered requestId=${accessRequest.requestId} continuation=${
+          accessRequest.mobileContinuationUrl ? "minted" : "absent"
+        }`,
+      );
     }
     const response = noStore(NextResponse.json(accessRequest));
     setRequestBindingCookie(

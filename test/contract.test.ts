@@ -21,6 +21,12 @@ import {
 } from "../src/lib/vana/constants";
 import { mapClientError } from "../src/lib/vana/errors";
 import {
+  createMemoryDeliveryStore,
+  createRedisDeliveryStore,
+  DeliveryStoreError,
+  resolveDeliveryStore,
+} from "../src/lib/vana/delivery-store";
+import {
   consumeForegroundDelivery,
   createForegroundDelivery,
   getDeliveredResult,
@@ -215,56 +221,203 @@ test("extends a request binding only when the access request outlives one hour",
   assert.equal(decode(longerLived).expiresAt, 3 * 60 * 60 * 1_000);
 });
 
-test("uses a one-time browser-bound foreground delivery capability", () => {
+const DELIVERY_BINDING = {
+  version: 2 as const,
+  requestId: "dcr_delivery",
+  appId: LOREBOOK_DEEP_APP.id,
+  scopes: [...LOREBOOK_DEEP_APP.scopes],
+  returnOrigin: ORIGIN,
+  runtime: { env: "production", network: "mainnet" } as const,
+  expiresAt: 10_000,
+};
+const BUILDER = `0x${"a".repeat(40)}`;
+const DELIVERED_SNAPSHOT = {
+  kind: "deep" as const,
+  conversations: { totalConversations: 1, totalMessages: 2, themes: [], recentTitles: [] },
+};
+
+test("uses a one-time browser-bound foreground delivery capability", async () => {
+  const store = createMemoryDeliveryStore();
   const delivery = createForegroundDelivery(ORIGIN);
   assert.equal(delivery.url, `${ORIGIN}/api/vana/delivery`);
   assert.match(delivery.token, /^[A-Za-z0-9_-]{43}$/);
 
-  const binding = {
-    version: 2 as const,
-    requestId: "dcr_delivery",
-    appId: LOREBOOK_DEEP_APP.id,
-    scopes: [...LOREBOOK_DEEP_APP.scopes],
-    returnOrigin: ORIGIN,
-    runtime: { env: "production", network: "mainnet" } as const,
-    expiresAt: 10_000,
-  };
-  registerForegroundDelivery({
-    binding,
-    token: delivery.token,
-    builderAddress: `0x${"a".repeat(40)}`,
-    now: 1_000,
-  });
-  assert.equal(consumeForegroundDelivery({
-    requestId: binding.requestId,
-    token: delivery.token,
-    scopes: ["wrong.scope"],
-    builderAddress: `0x${"a".repeat(40)}`,
-    now: 1_001,
-  }), null);
-  assert.deepEqual(consumeForegroundDelivery({
-    requestId: binding.requestId,
-    token: delivery.token,
-    scopes: [...binding.scopes],
-    builderAddress: `0x${"a".repeat(40)}`,
-    now: 1_002,
-  }), binding);
-  assert.equal(consumeForegroundDelivery({
-    requestId: binding.requestId,
-    token: delivery.token,
-    scopes: [...binding.scopes],
-    builderAddress: `0x${"a".repeat(40)}`,
-    now: 1_003,
-  }), null);
+  const binding = DELIVERY_BINDING;
+  await registerForegroundDelivery(
+    { binding, token: delivery.token, builderAddress: BUILDER },
+    store,
+  );
+  const deliver = (over: Record<string, unknown> = {}) =>
+    consumeForegroundDelivery(
+      {
+        requestId: binding.requestId,
+        token: delivery.token,
+        scopes: [...binding.scopes],
+        builderAddress: BUILDER,
+        now: 1_001,
+        ...over,
+      },
+      store,
+    );
 
-  const data = {
-    kind: "deep" as const,
-    conversations: { totalConversations: 1, totalMessages: 2, themes: [], recentTitles: [] },
+  // Every refusal names its own cause instead of collapsing into one 403, and
+  // none of them consume the capability the real phone still needs.
+  assert.deepEqual(await deliver({ requestId: "dcr_absent" }), {
+    ok: false,
+    reason: "unknown_request",
+  });
+  assert.deepEqual(await deliver({ token: "not-a-token" }), {
+    ok: false,
+    reason: "malformed_token",
+  });
+  assert.deepEqual(await deliver({ token: createForegroundDelivery(ORIGIN).token }), {
+    ok: false,
+    reason: "token_mismatch",
+  });
+  assert.deepEqual(await deliver({ builderAddress: `0x${"b".repeat(40)}` }), {
+    ok: false,
+    reason: "builder_mismatch",
+  });
+  assert.deepEqual(await deliver({ scopes: ["wrong.scope"] }), {
+    ok: false,
+    reason: "scope_mismatch",
+  });
+
+  // Two callbacks racing the same live capability: both read it, exactly one
+  // deletes it, and only that one is allowed to deliver.
+  const raced = await Promise.all([deliver(), deliver()]);
+  assert.deepEqual(raced.filter((result) => result.ok), [{ ok: true, binding }]);
+  assert.deepEqual(raced.filter((result) => !result.ok), [
+    { ok: false, reason: "already_consumed" },
+  ]);
+  assert.deepEqual(await deliver(), { ok: false, reason: "unknown_request" });
+
+  await storeDeliveredResult(
+    { binding, scope: binding.scopes[0]!, data: DELIVERED_SNAPSHOT, now: 2_000 },
+    store,
+  );
+  assert.deepEqual(await getDeliveredResult(binding, 2_001, store), {
+    scope: binding.scopes[0],
+    data: DELIVERED_SNAPSHOT,
+  });
+  assert.equal(
+    await getDeliveredResult({ ...binding, returnOrigin: "https://evil.example" }, 2_001, store),
+    null,
+  );
+  assert.equal(await getDeliveredResult(binding, 2_000 + 5 * 60 * 1_000, store), null);
+});
+
+test("carries a delivery capability between separate server instances", async () => {
+  // One Redis keyspace, two independently constructed stores: the mint happens
+  // on one instance and the phone's callback lands on the other, which is the
+  // case a module-level map silently fails.
+  const keyspace = new Map<string, string>();
+  const sent: (string | number)[][] = [];
+  const reply = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  const fetchFn = (async (_url: string, init: RequestInit) => {
+    const args = JSON.parse(String(init.body)) as (string | number)[];
+    sent.push(args);
+    const [verb, key, value] = args as [string, string, string];
+    if (verb === "SET") {
+      keyspace.set(key, value);
+      return reply({ result: "OK" });
+    }
+    if (verb === "GET") return reply({ result: keyspace.get(key) ?? null });
+    if (verb === "DEL") return reply({ result: keyspace.delete(key) ? 1 : 0 });
+    return reply({ error: `unexpected ${verb}` });
+  }) as unknown as typeof fetch;
+
+  const minting = createRedisDeliveryStore({ url: "https://redis.example/", token: "t", fetchFn });
+  const delivering = createRedisDeliveryStore({ url: "https://redis.example", token: "t", fetchFn });
+  const delivery = createForegroundDelivery(ORIGIN);
+  const binding = { ...DELIVERY_BINDING, expiresAt: Date.now() + 60_000 };
+
+  await registerForegroundDelivery(
+    { binding, token: delivery.token, builderAddress: BUILDER },
+    minting,
+  );
+  // Registrations expire in the store too, so a lost callback cannot leave a
+  // usable capability behind.
+  assert.equal(sent[0]?.[0], "SET");
+  assert.equal(sent[0]?.[3], "PX");
+  assert.ok(Number(sent[0]?.[4]) > 0);
+  // The bearer itself is never written to the shared store.
+  assert.ok(!String(sent[0]?.[2]).includes(delivery.token));
+
+  const consume = () =>
+    consumeForegroundDelivery(
+      {
+        requestId: binding.requestId,
+        token: delivery.token,
+        scopes: [...binding.scopes],
+        builderAddress: BUILDER,
+      },
+      delivering,
+    );
+  assert.deepEqual(await consume(), { ok: true, binding });
+  assert.deepEqual(await consume(), { ok: false, reason: "unknown_request" });
+
+  await storeDeliveredResult(
+    { binding, scope: binding.scopes[0]!, data: DELIVERED_SNAPSHOT },
+    delivering,
+  );
+  assert.deepEqual(await getDeliveredResult(binding, Date.now(), minting), {
+    scope: binding.scopes[0],
+    data: DELIVERED_SNAPSHOT,
+  });
+});
+
+test("surfaces an unreachable delivery store instead of a silent refusal", async () => {
+  const failing = createRedisDeliveryStore({
+    url: "https://redis.example",
+    token: "t",
+    fetchFn: (async () => new Response("nope", { status: 500 })) as unknown as typeof fetch,
+  });
+  await assert.rejects(
+    () => failing.readRegistration("dcr_delivery", Date.now()),
+    DeliveryStoreError,
+  );
+  assert.equal(mapClientError(new DeliveryStoreError("down")).status, 503);
+});
+
+test("refuses a half-configured delivery store rather than falling back", async () => {
+  const saved = { ...process.env };
+  const clear = () => {
+    for (const name of [
+      "LOREBOOK_REDIS_REST_URL",
+      "LOREBOOK_REDIS_REST_TOKEN",
+      "KV_REST_API_URL",
+      "KV_REST_API_TOKEN",
+      "UPSTASH_REDIS_REST_URL",
+      "UPSTASH_REDIS_REST_TOKEN",
+    ]) {
+      delete process.env[name];
+    }
   };
-  storeDeliveredResult({ binding, scope: binding.scopes[0]!, data, now: 2_000 });
-  assert.deepEqual(getDeliveredResult(binding, 2_001), { scope: binding.scopes[0], data });
-  assert.equal(getDeliveredResult({ ...binding, returnOrigin: "https://evil.example" }, 2_001), null);
-  assert.equal(getDeliveredResult(binding, 2_000 + 5 * 60 * 1_000), null);
+  try {
+    clear();
+    assert.equal(resolveDeliveryStore().kind, "memory");
+
+    clear();
+    process.env.LOREBOOK_REDIS_REST_URL = "https://redis.example";
+    assert.throws(() => resolveDeliveryStore(), DeliveryStoreError);
+
+    clear();
+    process.env.LOREBOOK_REDIS_REST_TOKEN = "t";
+    assert.throws(() => resolveDeliveryStore(), DeliveryStoreError);
+
+    clear();
+    process.env.KV_REST_API_URL = "https://redis.example";
+    process.env.KV_REST_API_TOKEN = "t";
+    assert.equal(resolveDeliveryStore().kind, "redis");
+  } finally {
+    clear();
+    Object.assign(process.env, saved);
+  }
 });
 
 test("blocks reads until the grant covering all scopes is ready", () => {

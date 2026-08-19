@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    if (getDeliveredResult(bound.binding)) {
+    if (await getDeliveredResult(bound.binding)) {
       return jsonNoStore({ status: "ready_for_read" });
     }
 
