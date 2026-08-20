@@ -42,7 +42,17 @@ const CHAPTERS: Record<
 
 // States that render the disabled progress button. `ready_to_open` is excluded:
 // there the explicit "Open Vana" link is the primary affordance, not a spinner.
+// (Once the user has been to Vana and come back, `ready_to_open` does get a
+// spinner — see `Handoff` below.)
 const SPINNER_STATES = ["creating", "awaiting_approval", "reading"];
+
+// Vana finishing on the phone is invisible to this tab: the SDK stays in
+// `ready_to_open` until the next status poll lands, so for a couple of seconds
+// after Safari comes back the primary button still says "Open Vana" and it
+// reads as if the handoff did nothing. Nothing in the flow tells us the user
+// returned, so we infer it locally: they tapped the link ("opened"), then this
+// tab became visible again ("returned").
+type Handoff = "none" | "opened" | "returned";
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
@@ -298,6 +308,28 @@ function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirect
   // blocked, surface the universal HTTPS approval URL as manual recovery.
   const approvalRecoveryUrl =
     state.type === "awaiting_approval" && state.popupBlocked ? state.request.approvalUrl : null;
+  const [handoff, setHandoff] = useState<Handoff>("none");
+  const returningFromVana = handoff === "returned" && mobileContinuationUrl !== null;
+
+  // Any move off `ready_to_open` (poll landed, reset, restart) ends the handoff.
+  useEffect(() => {
+    if (state.type !== "ready_to_open") setHandoff("none");
+  }, [state.type]);
+
+  useEffect(() => {
+    if (handoff !== "opened") return;
+    // `visibilitychange` covers the normal app-to-Safari return; `pageshow`
+    // covers a bfcache restore, where visibility may never flip.
+    const noteReturn = () => {
+      if (document.visibilityState === "visible") setHandoff("returned");
+    };
+    document.addEventListener("visibilitychange", noteReturn);
+    window.addEventListener("pageshow", noteReturn);
+    return () => {
+      document.removeEventListener("visibilitychange", noteReturn);
+      window.removeEventListener("pageshow", noteReturn);
+    };
+  }, [handoff]);
 
   if (state.type === "done") {
     return <button className="secondary-button reset-button" type="button" onClick={() => connect.reset()}>Write another page</button>;
@@ -305,9 +337,16 @@ function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirect
 
   return (
     <div className="connect-action" aria-live="polite">
-      <p>{statusCopy(state.type, Boolean(mobileContinuationUrl), Boolean(approvalRecoveryUrl), mode)}</p>
+      <p>{statusCopy(state.type, Boolean(mobileContinuationUrl), Boolean(approvalRecoveryUrl), mode, returningFromVana)}</p>
       {mobileContinuationUrl ? (
-        <a className="primary-button" href={mobileContinuationUrl} target="_blank" rel="noreferrer">Open Vana<ArrowIcon /></a>
+        returningFromVana ? (
+          <>
+            <button className="primary-button loading" type="button" disabled><span className="spinner" />Getting your data…</button>
+            <a className="secondary-button" href={mobileContinuationUrl} target="_blank" rel="noreferrer" onClick={() => setHandoff("opened")}>Didn’t finish? Open Vana again</a>
+          </>
+        ) : (
+          <a className="primary-button" href={mobileContinuationUrl} target="_blank" rel="noreferrer" onClick={() => setHandoff("opened")}>Open Vana<ArrowIcon /></a>
+        )
       ) : null}
       {approvalRecoveryUrl ? (
         <a className="secondary-button" href={approvalRecoveryUrl} target="_blank" rel="noreferrer">Open Vana approval</a>
@@ -323,7 +362,8 @@ function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirect
   );
 }
 
-function statusCopy(type: string, hasMobileContinuation: boolean, hasApprovalRecovery: boolean, mode: LorebookJourney): string {
+function statusCopy(type: string, hasMobileContinuation: boolean, hasApprovalRecovery: boolean, mode: LorebookJourney, returningFromVana = false): string {
+  if (returningFromVana) return "Welcome back—we’re picking up what you approved in Vana. This takes a few seconds.";
   if (hasMobileContinuation) return "Open Vana to review this request, then come back to this tab.";
   if (hasApprovalRecovery) return "Vana approval is ready. Open it to continue.";
   if (type === "idle") return mode === "quick" ? "We’ll ask for your Spotify profile—nothing more." : mode === "desktop-saved-tracks" ? "We’ll ask Vana Desktop for your Spotify saved tracks." : "We’ll ask for your ChatGPT conversations and summarize patterns locally.";
