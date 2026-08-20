@@ -121,6 +121,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
 .primary-button svg { width: 20px; height: 20px; }
 .primary-button:disabled { cursor: wait; opacity: .78; }
 .secondary-button { color: #f7f4e9; background: rgba(255,255,255,.1); }
+.reset-button { width: 100%; margin-top: 25px; }
 .approval-recovery { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
 .spinner { width: 17px; height: 17px; border: 2px solid rgba(28,48,40,.3); border-top-color: var(--night); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

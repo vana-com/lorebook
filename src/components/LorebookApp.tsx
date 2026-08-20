@@ -300,7 +300,7 @@ function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirect
     state.type === "awaiting_approval" && state.popupBlocked ? state.request.approvalUrl : null;
 
   if (state.type === "done") {
-    return <button className="secondary-button" type="button" onClick={() => connect.reset()}>Write another page</button>;
+    return <button className="secondary-button reset-button" type="button" onClick={() => connect.reset()}>Write another page</button>;
   }
 
   return (
