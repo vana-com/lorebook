@@ -820,9 +820,9 @@ test("maps SDK and unknown failures to sanitized client errors", () => {
     status: 409,
   });
   assert.deepEqual(mapClientError(new JobNotFoundError("private identity detail")), {
-    kind: "not_ready",
-    error: "The data owner does not have a ready Personal Server enclave.",
-    status: 409,
+    kind: "unavailable",
+    error: "The enclave read job could not be found.",
+    status: 502,
   });
   assert.deepEqual(mapClientError(new GrantInvalidError("private grant detail")), {
     kind: "failed",
