@@ -18,7 +18,19 @@ import {
   type VanaRuntime,
 } from "@/lib/vana/runtime";
 
-type ErrorBody = { error?: unknown };
+type ErrorBody = { kind?: unknown; error?: unknown; detail?: unknown };
+type LorebookErrorKind = "empty" | "failed" | "unavailable";
+
+class LorebookRequestError extends Error {
+  constructor(
+    message: string,
+    readonly kind?: LorebookErrorKind,
+    readonly detail?: string,
+  ) {
+    super(message);
+    this.name = "LorebookRequestError";
+  }
+}
 
 const CHAPTERS: Record<
   LorebookMode,
@@ -58,10 +70,27 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null);
-    const candidate = isRecord(body) ? (body as ErrorBody).error : undefined;
-    throw new Error(typeof candidate === "string" ? candidate : "Lorebook could not finish that read.");
+    const errorBody = isRecord(body) ? (body as ErrorBody) : {};
+    const candidate = errorBody.error;
+    const kind =
+      errorBody.kind === "failed" || errorBody.kind === "unavailable"
+        ? errorBody.kind
+        : undefined;
+    throw new LorebookRequestError(
+      typeof candidate === "string" ? candidate : "Lorebook could not finish that read.",
+      kind,
+      typeof errorBody.detail === "string" ? errorBody.detail : undefined,
+    );
   }
   return (await response.json()) as T;
+}
+
+async function readLorebookResult(path: string): Promise<ApprovedDataResult<LorebookSnapshot>> {
+  const result = await jsonFetch<ApprovedDataResult<LorebookSnapshot>>(path);
+  if (!isRecord(result) || !isRecord(result.data)) {
+    throw new LorebookRequestError("The read returned no data.", "empty");
+  }
+  return result;
 }
 
 export function LorebookApp({
@@ -77,7 +106,7 @@ export function LorebookApp({
     getStatus: (requestId) =>
       jsonFetch<AccessRequestStatus>(`/api/vana/status?requestId=${encodeURIComponent(requestId)}`),
     readResult: (requestId) =>
-      jsonFetch<ApprovedDataResult<LorebookSnapshot>>(
+      readLorebookResult(
         `/api/vana/read?requestId=${encodeURIComponent(requestId)}`,
       ),
   });
@@ -343,6 +372,9 @@ function ConnectAction({
     state.type === "awaiting_approval" && state.popupBlocked ? state.request.approvalUrl : null;
   const [handoff, setHandoff] = useState<Handoff>("none");
   const returningFromVana = handoff === "returned" && mobileContinuationUrl !== null;
+  const errorDetail = state.type === "error" && state.error instanceof LorebookRequestError
+    ? state.error.detail
+    : undefined;
 
   // Any move off `ready_to_open` (poll landed, reset, restart) ends the handoff.
   useEffect(() => {
@@ -370,7 +402,7 @@ function ConnectAction({
 
   return (
     <div className="connect-action" aria-live="polite">
-      <p>{statusCopy(state.type, Boolean(mobileContinuationUrl), Boolean(approvalRecoveryUrl), mode, returningFromVana)}</p>
+      <p>{statusCopy(state, Boolean(mobileContinuationUrl), Boolean(approvalRecoveryUrl), mode, returningFromVana)}</p>
       {mobileContinuationUrl ? (
         returningFromVana ? (
           <>
@@ -389,13 +421,14 @@ function ConnectAction({
       {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
       <details className="connection-details">
         <summary>Connection details</summary>
-        <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div><RuntimeDetails defaultEnv={defaultEnv} defaultNetwork={defaultNetwork} /></dl>
+        <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div>{errorDetail ? <div><dt>Reason</dt><dd>{errorDetail}</dd></div> : null}<RuntimeDetails defaultEnv={defaultEnv} defaultNetwork={defaultNetwork} /></dl>
       </details>
     </div>
   );
 }
 
-function statusCopy(type: string, hasMobileContinuation: boolean, hasApprovalRecovery: boolean, mode: LorebookJourney, returningFromVana = false): string {
+function statusCopy(state: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>["state"], hasMobileContinuation: boolean, hasApprovalRecovery: boolean, mode: LorebookJourney, returningFromVana = false): string {
+  const type = state.type;
   if (returningFromVana) return "Welcome back—we’re picking up what you approved in Vana. This takes a few seconds.";
   if (hasMobileContinuation) return "Open Vana to review this request, then come back to this tab.";
   if (hasApprovalRecovery) return "Vana approval is ready. Open it to continue.";
@@ -403,7 +436,16 @@ function statusCopy(type: string, hasMobileContinuation: boolean, hasApprovalRec
   if (type === "creating") return "Opening a private data request…";
   if (type === "awaiting_approval") return "Approve the request in Vana, then come back here.";
   if (type === "reading") return "Reading only what you approved…";
-  if (type === "error") return "That page stayed blank. No new data was added to Lorebook.";
+  if (type === "error") {
+    if (state.error instanceof LorebookRequestError) {
+      if (state.error.kind === "empty") return "That read finished without anything to show. No new page was added.";
+      if (state.error.kind === "failed") return state.error.detail
+        ? "That read failed, so no new page was added. You can find what happened in Connection details."
+        : "That read failed, so no new page was added.";
+      if (state.error.kind === "unavailable") return "We couldn’t reach your data just now. No new page was added.";
+    }
+    return "We couldn’t finish that page. No new data was added.";
+  }
   return "";
 }
 

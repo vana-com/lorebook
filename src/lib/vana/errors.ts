@@ -30,6 +30,7 @@ export type ClientErrorKind =
 export type ClientError = {
   kind: ClientErrorKind;
   error: string;
+  detail?: string;
   status: number;
 };
 
@@ -107,7 +108,18 @@ export function mapClientError(error: unknown): ClientError {
       status: 503,
     };
   }
-  if (error instanceof JobEnvelopeError || error instanceof JobRejectedError) {
+  if (error instanceof JobRejectedError) {
+    const failureReason = error.details?.failureReason;
+    return {
+      kind: "failed",
+      error: "The enclave could not complete this read.",
+      ...(typeof failureReason === "string" && failureReason.trim()
+        ? { detail: failureReason.trim() }
+        : {}),
+      status: 502,
+    };
+  }
+  if (error instanceof JobEnvelopeError) {
     return {
       kind: "failed",
       error: "The Enclave Gateway returned an invalid read result.",

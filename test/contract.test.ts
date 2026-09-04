@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   GrantInvalidError,
   JobNotFoundError,
+  JobRejectedError,
   JobTimeoutError,
   OwnerNotReadyError,
 } from "@opendatalabs/vana-sdk";
@@ -824,6 +825,20 @@ test("maps SDK and unknown failures to sanitized client errors", () => {
     error: "The enclave read job could not be found.",
     status: 502,
   });
+  assert.deepEqual(
+    mapClientError(
+      new JobRejectedError("private job detail", undefined, null, {
+        state: "failed",
+        failureReason: "The source stopped before it could return data.",
+      }),
+    ),
+    {
+      kind: "failed",
+      error: "The enclave could not complete this read.",
+      detail: "The source stopped before it could return data.",
+      status: 502,
+    },
+  );
   assert.deepEqual(mapClientError(new GrantInvalidError("private grant detail")), {
     kind: "failed",
     error: "The approved grant does not permit this enclave read.",

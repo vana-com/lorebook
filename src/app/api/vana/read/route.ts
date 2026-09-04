@@ -43,7 +43,11 @@ export async function GET(request: NextRequest) {
     const clientError = mapClientError(error);
     console.error(`[vana/read] Read failed for ${requestId}`, error);
     return jsonNoStore(
-      { kind: clientError.kind, error: clientError.error },
+      {
+        kind: clientError.kind,
+        error: clientError.error,
+        ...(clientError.detail ? { detail: clientError.detail } : {}),
+      },
       { status: clientError.status },
     );
   }
