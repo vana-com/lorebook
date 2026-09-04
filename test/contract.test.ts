@@ -49,6 +49,7 @@ import {
 import {
   resolveFixtureJourney,
   resolveLaunchRuntime,
+  resolveVanaDefaultNetwork,
   chainIdForNetwork,
   runtimeOptionId,
   RUNTIME_OPTIONS,
@@ -95,6 +96,34 @@ test("strictly validates and resolves launch runtime", () => {
   assert.throws(() => resolveLaunchRuntime(new URLSearchParams("vana_env=staging")), /Invalid vana_env/);
   assert.throws(() => resolveLaunchRuntime(new URLSearchParams("network=testnet")), /Invalid network/);
   assert.throws(() => resolveLaunchRuntime(new URLSearchParams("network=moksha&network=mainnet")), /only be provided once/);
+});
+
+test("uses the validated server network default while query parameters win", () => {
+  const defaultNetwork = resolveVanaDefaultNetwork({
+    VANA_DEFAULT_NETWORK: "moksha",
+  });
+  assert.equal(defaultNetwork, "moksha");
+  assert.deepEqual(resolveLaunchRuntime(new URLSearchParams(), defaultNetwork), {
+    env: "production",
+    network: "moksha",
+  });
+  assert.deepEqual(
+    resolveLaunchRuntime(new URLSearchParams("network=mainnet"), defaultNetwork),
+    { env: "production", network: "mainnet" },
+  );
+  assert.equal(resolveVanaDefaultNetwork({}), "mainnet");
+  assert.throws(
+    () => resolveVanaDefaultNetwork({ VANA_DEFAULT_NETWORK: "testnet" }),
+    /Invalid VANA_DEFAULT_NETWORK/,
+  );
+  assert.throws(
+    () =>
+      resolveVanaDefaultNetwork({
+        VANA_DEFAULT_NETWORK: "mainnet",
+        VANA_GATEWAY_URL: "https://gateway-moksha.example",
+      }),
+    /mainnet.*Moksha Gateway/,
+  );
 });
 
 test("forwards only the deployment runtime selectors to request creation", () => {

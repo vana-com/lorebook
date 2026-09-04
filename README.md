@@ -185,13 +185,18 @@ Configure the preview locally without committing real endpoints or keys:
 
 ```dotenv
 VANA_READ_MODE=enclave
+VANA_DEFAULT_NETWORK=moksha
 VANA_GATEWAY_URL=https://gateway-preview.example
 VANA_ACCESS_REQUEST_BASE_URL=http://approval-preview.example
 VANA_APPROVAL_APP_BASE_URL=http://approval-preview.example
 ```
 
-`VANA_GATEWAY_URL` must be a bare origin. To inspect an already-approved scope without the UI, use
-the CLI; it defaults to Moksha (`VANA_NETWORK=moksha`) and prints only the decrypted result:
+`VANA_DEFAULT_NETWORK` is the server-side fallback when the request URL has no `network` parameter.
+It accepts `mainnet` or `moksha` and defaults to `mainnet`; an explicit query parameter still wins.
+Startup fails with a clear configuration error when the default is `mainnet` but the Gateway host
+contains `moksha`. `VANA_GATEWAY_URL` must be a bare HTTPS origin (or loopback HTTP origin). To
+inspect an already-approved scope without the UI, use the CLI; it defaults to Moksha
+(`VANA_NETWORK=moksha`) and prints only the decrypted result:
 
 ```bash
 GRANT_ID=0x... \

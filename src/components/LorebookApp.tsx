@@ -64,7 +64,11 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function LorebookApp() {
+export function LorebookApp({
+  defaultNetwork,
+}: {
+  defaultNetwork: VanaRuntime["network"];
+}) {
   const [mode, setMode] = useState<LorebookJourney>("quick");
   const connect = useDirectVanaConnect<LorebookSnapshot>({
     createRequest: () => jsonFetch<AccessRequest>(buildRequestPath(mode, window.location.search), { method: "POST" }),
@@ -93,7 +97,7 @@ export function LorebookApp() {
 
   return (
     <main className="lorebook-shell">
-      <NetworkSwitch />
+      <NetworkSwitch defaultNetwork={defaultNetwork} />
 
       <header className="site-header">
         <span className="brand">
@@ -156,7 +160,11 @@ export function LorebookApp() {
           <div className="portrait-card">
             {data ? <LoreResult data={data} /> : <EmptyPortrait mode={mode} />}
           </div>
-          <ConnectAction connect={connect} mode={mode} />
+          <ConnectAction
+            connect={connect}
+            mode={mode}
+            defaultNetwork={defaultNetwork}
+          />
         </div>
       </section>
 
@@ -169,24 +177,28 @@ export function LorebookApp() {
 }
 
 /**
- * Dev affordance. Lorebook defaults to production + mainnet when the URL says
- * nothing, so testers on the bare URL silently drive production. Changing the
- * runtime is a full navigation on purpose: the SDK controller is keyed by
- * env/network, so every in-memory flow state must be dropped with it.
+ * Dev affordance. Lorebook uses the server-configured default when the URL says
+ * nothing. Changing the runtime is a full navigation on purpose: the SDK
+ * controller is keyed by env/network, so every in-memory flow state must be
+ * dropped with it.
  */
-function NetworkSwitch() {
+function NetworkSwitch({
+  defaultNetwork,
+}: {
+  defaultNetwork: VanaRuntime["network"];
+}) {
   const [runtime, setRuntime] = useState<VanaRuntime | "invalid" | null>(null);
   const [journey, setJourney] = useState<LorebookJourney | undefined>(undefined);
 
   useEffect(() => {
     const search = window.location.search;
     try {
-      setRuntime(resolveLaunchRuntime(new URLSearchParams(search)));
+      setRuntime(resolveLaunchRuntime(new URLSearchParams(search), defaultNetwork));
     } catch {
       setRuntime("invalid");
     }
     if (isDesktopFixtureSearch(search)) setJourney("desktop-saved-tracks");
-  }, []);
+  }, [defaultNetwork]);
 
   const selected = runtime && runtime !== "invalid" ? runtimeOptionId(runtime) : null;
   const tone = runtime === null ? "pending" : selected ?? "custom";
@@ -295,7 +307,15 @@ function Metric({ value, label }: { value: number | null; label: string }) {
   return <div className="metric"><strong>{value == null ? "—" : value.toLocaleString()}</strong><span>{label}</span></div>;
 }
 
-function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>; mode: LorebookJourney }) {
+function ConnectAction({
+  connect,
+  mode,
+  defaultNetwork,
+}: {
+  connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>;
+  mode: LorebookJourney;
+  defaultNetwork: VanaRuntime["network"];
+}) {
   const state = connect.state;
   // Mobile-deep: after asynchronous DCR creation the SDK exposes the single
   // continuation URL. The original click's iOS user activation cannot be
@@ -356,7 +376,7 @@ function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirect
       {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
       <details className="connection-details">
         <summary>Connection details</summary>
-        <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div><RuntimeDetails /></dl>
+        <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div><RuntimeDetails defaultNetwork={defaultNetwork} /></dl>
       </details>
     </div>
   );
@@ -374,18 +394,23 @@ function statusCopy(type: string, hasMobileContinuation: boolean, hasApprovalRec
   return "";
 }
 
-function RuntimeDetails() {
+function RuntimeDetails({ defaultNetwork }: { defaultNetwork: VanaRuntime["network"] }) {
   const [runtime, setRuntime] = useState<VanaRuntime | "invalid">({
     env: "production",
-    network: "mainnet",
+    network: defaultNetwork,
   });
   useEffect(() => {
     try {
-      setRuntime(resolveLaunchRuntime(new URLSearchParams(window.location.search)));
+      setRuntime(
+        resolveLaunchRuntime(
+          new URLSearchParams(window.location.search),
+          defaultNetwork,
+        ),
+      );
     } catch {
       setRuntime("invalid");
     }
-  }, []);
+  }, [defaultNetwork]);
   if (runtime === "invalid") return <div><dt>Runtime</dt><dd>invalid</dd></div>;
   return <><div><dt>Environment</dt><dd>{runtime.env}</dd></div><div><dt>Network</dt><dd>{runtime.network}</dd></div></>;
 }

@@ -15,14 +15,20 @@ import { jsonNoStore, noStore } from "@/lib/vana/response";
 import {
   resolveFixtureJourney,
   resolveLaunchRuntime,
+  resolveVanaDefaultNetwork,
   type VanaRuntime,
 } from "@/lib/vana/runtime";
 import { getVanaController, getVanaServerConfig } from "@/lib/vana/server";
 import { NextRequest, NextResponse } from "next/server";
 
+const DEFAULT_NETWORK = resolveVanaDefaultNetwork(process.env);
+
 export async function POST(request: NextRequest) {
   try {
-    const runtime = resolveLaunchRuntime(new URL(request.url).searchParams);
+    const runtime = resolveLaunchRuntime(
+      new URL(request.url).searchParams,
+      DEFAULT_NETWORK,
+    );
     const config = getVanaServerConfig();
     const journey = journeyFromUrl(request.url, runtime);
     const app = appForJourney(journey);

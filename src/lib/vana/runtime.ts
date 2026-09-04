@@ -8,6 +8,10 @@ export type VanaRuntime = {
   network: "moksha" | "mainnet";
 };
 
+export const VANA_NETWORKS = ["mainnet", "moksha"] as const;
+export const VANA_DEFAULT_NETWORK: VanaRuntime["network"] = "mainnet";
+export const MOKSHA_GATEWAY_HOST_MARKER = "moksha";
+
 export function chainIdForNetwork(network: VanaRuntime["network"]): 1480 | 14800 {
   return network === "mainnet" ? 1480 : 14800;
 }
@@ -39,7 +43,10 @@ export class LaunchRuntimeError extends Error {
   }
 }
 
-export function resolveLaunchRuntime(params: URLSearchParams): VanaRuntime {
+export function resolveLaunchRuntime(
+  params: URLSearchParams,
+  defaultNetwork: VanaRuntime["network"] = VANA_DEFAULT_NETWORK,
+): VanaRuntime {
   const vanaEnvs = params.getAll("vana_env");
   const networks = params.getAll("network");
 
@@ -60,8 +67,34 @@ export function resolveLaunchRuntime(params: URLSearchParams): VanaRuntime {
 
   return {
     env: vanaEnv ?? "production",
-    network: network ?? "mainnet",
+    network: network ?? defaultNetwork,
   };
+}
+
+export function resolveVanaDefaultNetwork(
+  env: Record<string, string | undefined>,
+): VanaRuntime["network"] {
+  const configured = env.VANA_DEFAULT_NETWORK?.trim().toLowerCase();
+  if (
+    configured &&
+    !VANA_NETWORKS.includes(configured as (typeof VANA_NETWORKS)[number])
+  ) {
+    throw new LaunchRuntimeError(
+      "Invalid VANA_DEFAULT_NETWORK. Expected mainnet or moksha.",
+    );
+  }
+  const network = (configured || VANA_DEFAULT_NETWORK) as VanaRuntime["network"];
+  const gatewayUrl = env.VANA_GATEWAY_URL?.trim();
+  if (
+    network === "mainnet" &&
+    gatewayUrl &&
+    gatewayHostname(gatewayUrl).includes(MOKSHA_GATEWAY_HOST_MARKER)
+  ) {
+    throw new LaunchRuntimeError(
+      "VANA_DEFAULT_NETWORK is mainnet but VANA_GATEWAY_URL points to a Moksha Gateway.",
+    );
+  }
+  return network;
 }
 
 /** Resolve a hidden fixture only when every explicit dev guard is present. */
@@ -94,4 +127,12 @@ function normalizeNetwork(value: string | null): VanaRuntime["network"] | null {
   if (value === null) return null;
   const normalized = value.toLowerCase();
   return normalized === "moksha" || normalized === "mainnet" ? normalized : null;
+}
+
+function gatewayHostname(value: string): string {
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
 }
