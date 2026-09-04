@@ -12,6 +12,7 @@ import {
   PaymentRequiredError,
   PersonalServerReadError,
 } from "@opendatalabs/vana-sdk/server";
+import { getAddress } from "viem";
 import { resolveAppUrl } from "../src/lib/vana/app-url";
 import {
   createRequestBinding,
@@ -62,6 +63,7 @@ import {
   EnclaveReadError,
   gatewayOrigin,
   isEnclaveReadMode,
+  readEnclaveScopes,
   resolveGrantOwner,
 } from "../src/lib/vana/enclave";
 import { readThenAcknowledge } from "../src/lib/vana/read-lifecycle";
@@ -313,6 +315,54 @@ test("prefers a status owner and otherwise resolves the grantor from the Gateway
     },
   });
   assert.equal(resolvedGrantor.toLowerCase(), grantor);
+});
+
+test("reads an enclave scope through the injected jobs client", async () => {
+  const owner = `0x${"a".repeat(40)}`;
+  const grantId = `0x${"1".repeat(64)}`;
+  const builderPrivateKey = `0x${"2".repeat(64)}`;
+  let clientOptions: unknown;
+  let readInput: unknown;
+  const data = await readEnclaveScopes({
+    gatewayUrl: "https://gateway.example",
+    chainId: 14800,
+    builderPrivateKey,
+    grantId,
+    scopes: ["spotify.profile"],
+    status: { ownerAddress: owner },
+    jobsClientFactory: (options) => {
+      clientOptions = options;
+      return {
+        readRaw: async (input) => {
+          readInput = input;
+          return {
+            v: 1,
+            jobId: "job-1",
+            scope: input.scope,
+            version: null,
+            contentType: "application/json",
+            body: Buffer.from(JSON.stringify({ profile: { display_name: "Ada" } })).toString(
+              "base64",
+            ),
+          };
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(clientOptions, {
+    gatewayUrl: "https://gateway.example",
+    chainId: 14800,
+    builderPrivateKey,
+  });
+  assert.deepEqual(readInput, {
+    owner: getAddress(owner),
+    grantId,
+    scope: "spotify.profile",
+    wait: 25,
+    timeoutMs: 30_000,
+  });
+  assert.deepEqual(data, { "spotify.profile": { profile: { display_name: "Ada" } } });
 });
 
 test("decodes the jobs result body as the direct-read JSON shape", () => {

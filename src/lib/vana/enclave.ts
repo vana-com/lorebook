@@ -141,6 +141,9 @@ export async function readEnclaveScopes(input: {
   scopes: readonly string[];
   status?: unknown;
   fetchFn?: typeof fetch;
+  jobsClientFactory?: (
+    options: Parameters<typeof createJobsClient>[0],
+  ) => Pick<ReturnType<typeof createJobsClient>, "readRaw">;
 }): Promise<Record<string, unknown>> {
   const gatewayUrl = gatewayOrigin(input.gatewayUrl);
   if (!GRANT_ID_PATTERN.test(input.grantId)) {
@@ -152,7 +155,7 @@ export async function readEnclaveScopes(input: {
     status: input.status,
     fetchFn: input.fetchFn,
   });
-  const client = createJobsClient({
+  const client = (input.jobsClientFactory ?? createJobsClient)({
     gatewayUrl,
     chainId: input.chainId,
     builderPrivateKey: input.builderPrivateKey as Hex,
