@@ -65,6 +65,7 @@ const SPINNER_STATES = ["creating", "awaiting_approval", "reading"];
 // returned, so we infer it locally: they tapped the link ("opened"), then this
 // tab became visible again ("returned").
 type Handoff = "none" | "opened" | "returned";
+type RetryNotice = "fresh_approval_required" | null;
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
@@ -371,6 +372,8 @@ function ConnectAction({
   const approvalRecoveryUrl =
     state.type === "awaiting_approval" && state.popupBlocked ? state.request.approvalUrl : null;
   const [handoff, setHandoff] = useState<Handoff>("none");
+  const [retryNotice, setRetryNotice] = useState<RetryNotice>(null);
+  const [retryPending, setRetryPending] = useState(false);
   const returningFromVana = handoff === "returned" && mobileContinuationUrl !== null;
   const errorDetail = state.type === "error" && state.error instanceof LorebookRequestError
     ? state.error.detail
@@ -379,6 +382,12 @@ function ConnectAction({
   // Any move off `ready_to_open` (poll landed, reset, restart) ends the handoff.
   useEffect(() => {
     if (state.type !== "ready_to_open") setHandoff("none");
+  }, [state.type]);
+
+  useEffect(() => {
+    if (state.type === "idle" || state.type === "done" || state.type === "error") {
+      setRetryNotice(null);
+    }
   }, [state.type]);
 
   useEffect(() => {
@@ -396,13 +405,28 @@ function ConnectAction({
     };
   }, [handoff]);
 
+  async function retryRead() {
+    setRetryPending(true);
+    setRetryNotice(null);
+    try {
+      const outcome = await connect.retryRead();
+      if (outcome === "fresh_approval_required") {
+        setRetryNotice(outcome);
+      }
+    } catch (error) {
+      console.error("[lorebook] Read retry failed", error);
+    } finally {
+      setRetryPending(false);
+    }
+  }
+
   if (state.type === "done") {
     return <button className="secondary-button reset-button" type="button" onClick={() => connect.reset()}>Write another page</button>;
   }
 
   return (
     <div className="connect-action" aria-live="polite">
-      <p>{statusCopy(state, Boolean(mobileContinuationUrl), Boolean(approvalRecoveryUrl), mode, returningFromVana)}</p>
+      <p>{statusCopy(state, Boolean(mobileContinuationUrl), Boolean(approvalRecoveryUrl), mode, returningFromVana, retryNotice)}</p>
       {mobileContinuationUrl ? (
         returningFromVana ? (
           <>
@@ -418,7 +442,7 @@ function ConnectAction({
       ) : null}
       {state.type === "idle" ? <button className="primary-button" type="button" onClick={() => void connect.start()}>{mode === "quick" ? "Read my public rhythm" : mode === "desktop-saved-tracks" ? "Import my liked songs" : "Map my curiosities"}<ArrowIcon /></button> : null}
       {SPINNER_STATES.includes(state.type) ? <button className="primary-button loading" type="button" disabled><span className="spinner" />{state.type === "reading" ? "Writing your page…" : "Waiting for Vana…"}</button> : null}
-      {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
+      {state.type === "error" ? <button className={`primary-button${retryPending ? " loading" : ""}`} type="button" disabled={retryPending} onClick={() => void retryRead()}>{retryPending ? <><span className="spinner" />Trying that read again…</> : <>Try that again<ArrowIcon /></>}</button> : null}
       <details className="connection-details">
         <summary>Connection details</summary>
         <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div>{errorDetail ? <div><dt>Reason</dt><dd>{errorDetail}</dd></div> : null}<RuntimeDetails defaultEnv={defaultEnv} defaultNetwork={defaultNetwork} /></dl>
@@ -427,8 +451,9 @@ function ConnectAction({
   );
 }
 
-function statusCopy(state: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>["state"], hasMobileContinuation: boolean, hasApprovalRecovery: boolean, mode: LorebookJourney, returningFromVana = false): string {
+function statusCopy(state: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>["state"], hasMobileContinuation: boolean, hasApprovalRecovery: boolean, mode: LorebookJourney, returningFromVana = false, retryNotice: RetryNotice = null): string {
   const type = state.type;
+  if (retryNotice === "fresh_approval_required") return "Your earlier approval can’t be reused. Review this request in Vana and approve it again.";
   if (returningFromVana) return "Welcome back—we’re picking up what you approved in Vana. This takes a few seconds.";
   if (hasMobileContinuation) return "Open Vana to review this request, then come back to this tab.";
   if (hasApprovalRecovery) return "Vana approval is ready. Open it to continue.";
