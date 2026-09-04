@@ -3,6 +3,7 @@ import { createJobsClient } from "@opendatalabs/vana-sdk/protocol/jobs-client";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
 
 const GRANT_ID_PATTERN = /^0x[0-9a-fA-F]{64}$/;
+const LOOPBACK_GATEWAY_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 export const ENCLAVE_READ_WAIT_SECONDS = 25;
 export const ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS = 5_000;
 export const ENCLAVE_READ_TIMEOUT_MS =
@@ -53,7 +54,8 @@ export function gatewayOrigin(rawGatewayUrl: string | undefined): string {
   try {
     const url = new URL(rawGatewayUrl.trim());
     if (
-      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      (url.protocol !== "https:" &&
+        (url.protocol !== "http:" || !LOOPBACK_GATEWAY_HOSTS.has(url.hostname))) ||
       url.pathname !== "/" ||
       url.search ||
       url.hash
@@ -63,7 +65,7 @@ export function gatewayOrigin(rawGatewayUrl: string | undefined): string {
     return url.origin;
   } catch {
     throw new EnclaveReadError(
-      "VANA_GATEWAY_URL must be a bare HTTP or HTTPS origin.",
+      "VANA_GATEWAY_URL must be a bare HTTPS origin or a loopback HTTP origin.",
       500,
     );
   }

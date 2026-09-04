@@ -275,8 +275,15 @@ test("maps an enclave scope mismatch to a terminal 403", () => {
 
 test("requires a bare Gateway origin", () => {
   assert.equal(gatewayOrigin("https://gateway.example"), "https://gateway.example");
+  assert.equal(gatewayOrigin("http://localhost:3000"), "http://localhost:3000");
+  assert.equal(gatewayOrigin("http://127.0.0.1:3000"), "http://127.0.0.1:3000");
+  assert.equal(gatewayOrigin("http://[::1]:3000"), "http://[::1]:3000");
   assert.throws(() => gatewayOrigin(undefined), /VANA_GATEWAY_URL/);
-  assert.throws(() => gatewayOrigin("https://gateway.example/v1"), /bare HTTP or HTTPS origin/);
+  assert.throws(
+    () => gatewayOrigin("http://gateway.example"),
+    /bare HTTPS origin or a loopback HTTP origin/,
+  );
+  assert.throws(() => gatewayOrigin("https://gateway.example/v1"), /bare HTTPS origin/);
 });
 
 test("prefers a status owner and otherwise resolves the grantor from the Gateway", async () => {
