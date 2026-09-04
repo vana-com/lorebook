@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import { createJobsClient } from "@opendatalabs/vana-sdk/protocol/jobs-client";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
 
@@ -114,7 +113,7 @@ export async function resolveGrantOwner(input: {
 
 export function decodeEnclaveResult(result: {
   contentType: string;
-  body: string;
+  body: Uint8Array;
 }): unknown {
   const mediaType = result.contentType.split(";", 1)[0]?.trim().toLowerCase();
   if (mediaType !== "application/json" && !mediaType?.endsWith("+json")) {
@@ -124,7 +123,7 @@ export function decodeEnclaveResult(result: {
     );
   }
   try {
-    return JSON.parse(Buffer.from(result.body, "base64").toString("utf8"));
+    return JSON.parse(new TextDecoder().decode(result.body));
   } catch {
     throw new EnclaveReadError(
       "The enclave returned an invalid JSON result.",

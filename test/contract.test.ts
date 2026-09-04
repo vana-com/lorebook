@@ -394,8 +394,8 @@ test("reads an enclave scope through the injected jobs client", async () => {
             scope: input.scope,
             version: null,
             contentType: "application/json",
-            body: Buffer.from(JSON.stringify({ profile: { display_name: "Ada" } })).toString(
-              "base64",
+            body: new TextEncoder().encode(
+              JSON.stringify({ profile: { display_name: "Ada" } }),
             ),
           };
         },
@@ -423,12 +423,16 @@ test("decodes the jobs result body as the direct-read JSON shape", () => {
   assert.deepEqual(
     decodeEnclaveResult({
       contentType: "application/json; charset=utf-8",
-      body: Buffer.from(JSON.stringify(payload)).toString("base64"),
+      body: new TextEncoder().encode(JSON.stringify(payload)),
     }),
     payload,
   );
   assert.throws(
-    () => decodeEnclaveResult({ contentType: "text/plain", body: "e30=" }),
+    () =>
+      decodeEnclaveResult({
+        contentType: "text/plain",
+        body: new TextEncoder().encode("{}"),
+      }),
     /unsupported content type/,
   );
 });
