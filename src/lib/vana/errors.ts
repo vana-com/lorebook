@@ -58,10 +58,10 @@ export function mapClientError(error: unknown): ClientError {
       status: 503,
     };
   }
-  if (error instanceof OwnerNotReadyError) {
+  if (error instanceof OwnerNotReadyError || error instanceof JobNotFoundError) {
     return {
       kind: "not_ready",
-      error: "The Personal Server enclave is not ready yet. Retry in a moment.",
+      error: "The data owner does not have a ready Personal Server enclave.",
       status: 409,
     };
   }
@@ -84,13 +84,6 @@ export function mapClientError(error: unknown): ClientError {
       kind: "unavailable",
       error: "The enclave read timed out. Retry in a moment.",
       status: 504,
-    };
-  }
-  if (error instanceof JobNotFoundError) {
-    return {
-      kind: "unavailable",
-      error: "The enclave read job could not be found.",
-      status: 502,
     };
   }
   if (error instanceof JobRequestTooLargeError) {

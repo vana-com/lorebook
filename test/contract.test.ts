@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   GrantInvalidError,
+  JobNotFoundError,
   JobTimeoutError,
   OwnerNotReadyError,
 } from "@opendatalabs/vana-sdk";
@@ -713,7 +714,12 @@ test("maps SDK and unknown failures to sanitized client errors", () => {
   });
   assert.deepEqual(mapClientError(new OwnerNotReadyError("private readiness detail")), {
     kind: "not_ready",
-    error: "The Personal Server enclave is not ready yet. Retry in a moment.",
+    error: "The data owner does not have a ready Personal Server enclave.",
+    status: 409,
+  });
+  assert.deepEqual(mapClientError(new JobNotFoundError("private identity detail")), {
+    kind: "not_ready",
+    error: "The data owner does not have a ready Personal Server enclave.",
     status: 409,
   });
   assert.deepEqual(mapClientError(new GrantInvalidError("private grant detail")), {
