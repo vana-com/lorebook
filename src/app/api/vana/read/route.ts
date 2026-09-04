@@ -5,6 +5,8 @@ import { getDeliveredResult } from "@/lib/vana/foreground-delivery";
 import { readApprovedScopes } from "@/lib/vana/server";
 import { NextRequest } from "next/server";
 
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   const requestId = requestIdFromUrl(request.url);
   if (!requestId) {

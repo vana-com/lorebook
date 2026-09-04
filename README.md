@@ -177,8 +177,9 @@ The preview jobs path is opt-in. With `VANA_READ_MODE=enclave`, Lorebook keeps t
 DCR creation and status polling, then submits each approved scope to the Node-only SDK jobs client.
 The server resolves the grant owner from the status when available or from the Gateway's public
 grant endpoint, decrypts the jobs result, and feeds the decoded JSON through the existing Lorebook
-rendering. Enclave mode does not use escrow or send a consumer acknowledgement. With the flag unset,
-the production direct-read behavior is unchanged.
+rendering. Enclave mode does not use escrow; after a successful read it sends the same consumer
+acknowledgement as the direct path so Vana Web can complete the request. With the flag unset, the
+production direct-read behavior is unchanged.
 
 Configure the preview locally without committing real endpoints or keys:
 

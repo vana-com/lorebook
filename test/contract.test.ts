@@ -53,11 +53,15 @@ import {
 } from "../src/lib/vana/runtime";
 import { directEndpointOverrides } from "../src/lib/vana/endpoints";
 import {
+  approvedEnclaveScopes,
   decodeEnclaveResult,
+  ENCLAVE_READ_WAIT_SECONDS,
+  EnclaveReadError,
   gatewayOrigin,
   isEnclaveReadMode,
   resolveGrantOwner,
 } from "../src/lib/vana/enclave";
+import { readThenAcknowledge } from "../src/lib/vana/read-lifecycle";
 
 const SECRET = `0x${"1".repeat(64)}`;
 const ORIGIN = "https://snapshot.example";
@@ -185,9 +189,84 @@ test("applies only configured Direct endpoint overrides", () => {
 
 test("keeps enclave reads opt-in and resolves protocol chain ids", () => {
   assert.equal(isEnclaveReadMode({}), false);
+  assert.equal(ENCLAVE_READ_WAIT_SECONDS, 25);
   assert.equal(isEnclaveReadMode({ VANA_READ_MODE: "enclave" }), true);
   assert.equal(chainIdForNetwork("mainnet"), 1480);
   assert.equal(chainIdForNetwork("moksha"), 14800);
+});
+
+test("acknowledges every successful read without hiding its result", async () => {
+  const calls: string[] = [];
+  const result = await readThenAcknowledge({
+    read: async () => {
+      calls.push("read");
+      return { ok: true };
+    },
+    acknowledge: async () => {
+      calls.push("acknowledge");
+    },
+    onAcknowledgeError: () => assert.fail("acknowledgement should succeed"),
+  });
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(calls, ["read", "acknowledge"]);
+
+  const warning = new Error("ack unavailable");
+  let observed: unknown;
+  assert.equal(
+    await readThenAcknowledge({
+      read: async () => "data",
+      acknowledge: async () => {
+        throw warning;
+      },
+      onAcknowledgeError: (error) => {
+        observed = error;
+      },
+    }),
+    "data",
+  );
+  assert.equal(observed, warning);
+
+  let acknowledged = false;
+  await assert.rejects(
+    () =>
+      readThenAcknowledge({
+        read: async () => {
+          throw new Error("read failed");
+        },
+        acknowledge: async () => {
+          acknowledged = true;
+        },
+        onAcknowledgeError: () => assert.fail("acknowledgement must not run"),
+      }),
+    /read failed/,
+  );
+  assert.equal(acknowledged, false);
+});
+
+test("maps an enclave scope mismatch to a terminal 403", () => {
+  assert.deepEqual(
+    approvedEnclaveScopes(
+      { scopes: ["spotify.profile"] },
+      ["spotify.profile"],
+    ),
+    ["spotify.profile"],
+  );
+  assert.throws(
+    () =>
+      approvedEnclaveScopes(
+        { scopes: ["spotify.profile"] },
+        ["chatgpt.conversations"],
+      ),
+    (error) => {
+      assert.ok(error instanceof EnclaveReadError);
+      assert.deepEqual(mapClientError(error), {
+        kind: "failed",
+        error: "The approved grant does not cover Lorebook's requested data type.",
+        status: 403,
+      });
+      return true;
+    },
+  );
 });
 
 test("requires a bare Gateway origin", () => {
@@ -631,6 +710,14 @@ test("maps SDK and unknown failures to sanitized client errors", () => {
     error: "The approved grant does not permit this enclave read.",
     status: 403,
   });
+  assert.deepEqual(
+    mapClientError(new EnclaveReadError("The approved grant does not cover this scope.", 403)),
+    {
+      kind: "failed",
+      error: "The approved grant does not cover this scope.",
+      status: 403,
+    },
+  );
   assert.deepEqual(mapClientError(new JobTimeoutError("private timeout detail")), {
     kind: "unavailable",
     error: "The enclave read timed out. Retry in a moment.",

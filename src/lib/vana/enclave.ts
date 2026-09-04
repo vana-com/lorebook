@@ -3,6 +3,7 @@ import { createJobsClient } from "@opendatalabs/vana-sdk/protocol/jobs-client";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
 
 const GRANT_ID_PATTERN = /^0x[0-9a-fA-F]{64}$/;
+export const ENCLAVE_READ_WAIT_SECONDS = 25;
 
 export class EnclaveReadError extends Error {
   constructor(
@@ -18,6 +19,25 @@ export function isEnclaveReadMode(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   return env.VANA_READ_MODE?.trim().toLowerCase() === "enclave";
+}
+
+export function approvedEnclaveScopes(
+  status: { scopes?: readonly string[]; scope?: string },
+  requestedScopes: readonly string[],
+): string[] {
+  const approved = status.scopes?.length
+    ? status.scopes
+    : status.scope
+      ? [status.scope]
+      : requestedScopes;
+  const requested = requestedScopes.filter((scope) => approved.includes(scope));
+  if (requested.length !== requestedScopes.length) {
+    throw new EnclaveReadError(
+      "The approved grant does not cover Lorebook's requested data type.",
+      403,
+    );
+  }
+  return requested;
 }
 
 export function gatewayOrigin(rawGatewayUrl: string | undefined): string {
@@ -138,6 +158,7 @@ export async function readEnclaveScopes(input: {
       owner,
       grantId: input.grantId as Hex,
       scope,
+      wait: ENCLAVE_READ_WAIT_SECONDS,
     });
     data[scope] = decodeEnclaveResult(result);
   }
