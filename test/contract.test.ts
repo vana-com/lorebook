@@ -45,6 +45,7 @@ import {
   runtimeOptionId,
   RUNTIME_OPTIONS,
 } from "../src/lib/vana/runtime";
+import { directEndpointOverrides } from "../src/lib/vana/endpoints";
 
 const SECRET = `0x${"1".repeat(64)}`;
 const ORIGIN = "https://snapshot.example";
@@ -148,6 +149,26 @@ test("enables the Desktop fixture only with explicit dev and Moksha guards", () 
 test("SDK service-plane selection resolves the expected approval hosts", () => {
   assert.equal(new URL(getDirectEndpoints("dev").approvalAppBaseUrl).hostname, "app-dev.vana.org");
   assert.equal(new URL(getDirectEndpoints("production").approvalAppBaseUrl).hostname, "app.vana.org");
+});
+
+test("applies only configured Direct endpoint overrides", () => {
+  assert.equal(directEndpointOverrides({}), undefined);
+  assert.deepEqual(
+    directEndpointOverrides({
+      VANA_ACCESS_REQUEST_BASE_URL: " http://localhost:3083 ",
+    }),
+    { accessRequestBaseUrl: "http://localhost:3083" },
+  );
+  assert.deepEqual(
+    directEndpointOverrides({
+      VANA_ACCESS_REQUEST_BASE_URL: "http://localhost:3083",
+      VANA_APPROVAL_APP_BASE_URL: "http://localhost:3083",
+    }),
+    {
+      accessRequestBaseUrl: "http://localhost:3083",
+      approvalAppBaseUrl: "http://localhost:3083",
+    },
+  );
 });
 
 test("derives a fixed return URL from APP_URL origin", () => {

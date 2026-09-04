@@ -17,6 +17,7 @@ import {
 import { resolveAppUrl } from "./app-url";
 import { assertGrantReadReady } from "./capability";
 import { LOREBOOK_QUICK_APP, type VanaAppDefinition } from "./constants";
+import { directEndpointOverrides } from "./endpoints";
 import type { VanaRuntime } from "./runtime";
 
 type Controller = ReturnType<typeof createDirectDataController>;
@@ -49,7 +50,8 @@ export function getVanaController(
   app: VanaAppDefinition = LOREBOOK_QUICK_APP,
   config = getVanaServerConfig(),
 ): Controller {
-  const key = `${app.id}:${runtime.env}:${runtime.network}`;
+  const endpoints = directEndpointOverrides();
+  const key = `${app.id}:${runtime.env}:${runtime.network}:${endpoints?.accessRequestBaseUrl ?? ""}:${endpoints?.approvalAppBaseUrl ?? ""}`;
   const cached = controllers.get(key);
   if (cached) return cached;
 
@@ -69,6 +71,7 @@ export function getVanaController(
     // Request every scope at once so the approval mints ONE grant covering all
     // of them (avoids the BUI-732 scope-overwrite from separate DCRs).
     scopes: [...app.scopes],
+    ...(endpoints ? { endpoints } : {}),
   });
   controllers.set(key, controller);
   return controller;
