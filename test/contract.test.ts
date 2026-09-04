@@ -55,7 +55,9 @@ import { directEndpointOverrides } from "../src/lib/vana/endpoints";
 import {
   approvedEnclaveScopes,
   decodeEnclaveResult,
+  ENCLAVE_READ_TIMEOUT_MS,
   ENCLAVE_READ_WAIT_SECONDS,
+  ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS,
   EnclaveReadError,
   gatewayOrigin,
   isEnclaveReadMode,
@@ -190,6 +192,8 @@ test("applies only configured Direct endpoint overrides", () => {
 test("keeps enclave reads opt-in and resolves protocol chain ids", () => {
   assert.equal(isEnclaveReadMode({}), false);
   assert.equal(ENCLAVE_READ_WAIT_SECONDS, 25);
+  assert.equal(ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS, 5_000);
+  assert.equal(ENCLAVE_READ_TIMEOUT_MS, 30_000);
   assert.equal(isEnclaveReadMode({ VANA_READ_MODE: "enclave" }), true);
   assert.equal(chainIdForNetwork("mainnet"), 1480);
   assert.equal(chainIdForNetwork("moksha"), 14800);

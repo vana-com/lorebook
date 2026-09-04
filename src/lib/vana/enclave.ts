@@ -4,6 +4,9 @@ import { getAddress, isAddress, type Address, type Hex } from "viem";
 
 const GRANT_ID_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 export const ENCLAVE_READ_WAIT_SECONDS = 25;
+export const ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS = 5_000;
+export const ENCLAVE_READ_TIMEOUT_MS =
+  60_000 - ENCLAVE_READ_WAIT_SECONDS * 1_000 - ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS;
 
 export class EnclaveReadError extends Error {
   constructor(
@@ -159,6 +162,7 @@ export async function readEnclaveScopes(input: {
       grantId: input.grantId as Hex,
       scope,
       wait: ENCLAVE_READ_WAIT_SECONDS,
+      timeoutMs: ENCLAVE_READ_TIMEOUT_MS,
     });
     data[scope] = decodeEnclaveResult(result);
   }
