@@ -13,7 +13,18 @@ import {
   PaymentRequiredError,
   PersonalServerReadError,
 } from "@opendatalabs/vana-sdk/server";
+import type {
+  JobResult,
+  JobState,
+  JobStatus,
+} from "@opendatalabs/vana-sdk/protocol/jobs";
 import { getAddress } from "viem";
+import {
+  ENCLAVE_CLIENT_POLL_INTERVAL_MS,
+  ENCLAVE_CLIENT_TIMEOUT_MS,
+  pollLorebookResult,
+  readFailureCopy,
+} from "../src/components/LorebookApp";
 import { resolveAppUrl } from "../src/lib/vana/app-url";
 import {
   createRequestBinding,
@@ -33,6 +44,7 @@ import {
   createRedisDeliveryStore,
   DeliveryStoreError,
   resolveDeliveryStore,
+  type DeliveryStore,
 } from "../src/lib/vana/delivery-store";
 import {
   consumeForegroundDelivery,
@@ -60,6 +72,8 @@ import { directEndpointOverrides } from "../src/lib/vana/endpoints";
 import {
   approvedEnclaveScopes,
   decodeEnclaveResult,
+  ENCLAVE_JOB_DEADLINE_SECONDS,
+  ENCLAVE_POLL_TIMEOUT_MS,
   ENCLAVE_READ_TIMEOUT_MS,
   ENCLAVE_READ_WAIT_SECONDS,
   ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS,
@@ -67,12 +81,72 @@ import {
   gatewayOrigin,
   isEnclaveReadMode,
   readEnclaveScopes,
+  readResumableEnclaveScopes,
   resolveGrantOwner,
+  shouldUseEnclaveRead,
 } from "../src/lib/vana/enclave";
 import { readThenAcknowledge } from "../src/lib/vana/read-lifecycle";
 
 const SECRET = `0x${"1".repeat(64)}`;
 const ORIGIN = "https://snapshot.example";
+
+function resumableReadInput(requestId: string, store: DeliveryStore) {
+  return {
+    requestId,
+    gatewayUrl: "https://gateway.example",
+    chainId: 14800,
+    builderPrivateKey: `0x${"2".repeat(64)}`,
+    grantId: `0x${"1".repeat(64)}`,
+    scopes: ["spotify.profile"],
+    status: { ownerAddress: `0x${"a".repeat(40)}` },
+    now: () => 1_000,
+    store,
+  };
+}
+
+function jobStatus(jobId: string, state: JobState): JobStatus {
+  return {
+    jobId,
+    state,
+    operation: "raw_read",
+    owner: getAddress(`0x${"a".repeat(40)}`),
+    grantId: `0x${"1".repeat(64)}`,
+    scope: "spotify.profile",
+    pinnedVersion: null,
+    attempt: 1,
+    price: "0",
+    payer: "builder",
+    paymentState: "none",
+    createdAt: new Date(1_000).toISOString(),
+    claimedAt: null,
+    completedAt: state === "completed" ? new Date(2_000).toISOString() : null,
+    failureReason: state === "failed" ? "The source read failed." : null,
+    ...(state === "completed"
+      ? {
+          result: {
+            objectKey: `jobresults/14800/${jobId}`,
+            url: `https://storage.example/${jobId}`,
+            size: 1,
+            hash: `0x${"0".repeat(64)}`,
+            expiresAt: new Date(901_000).toISOString(),
+          },
+        }
+      : {}),
+  };
+}
+
+function jobResult(jobId: string): JobResult {
+  return {
+    v: 1,
+    jobId,
+    scope: "spotify.profile",
+    version: null,
+    contentType: "application/json",
+    body: new TextEncoder().encode(
+      JSON.stringify({ profile: { display_name: "Ada" } }),
+    ),
+  };
+}
 
 test("strictly validates and resolves launch runtime", () => {
   assert.deepEqual(resolveLaunchRuntime(new URLSearchParams()), {
@@ -247,6 +321,17 @@ test("applies only configured Direct endpoint overrides", () => {
 
 test("keeps enclave reads opt-in and resolves protocol chain ids", () => {
   assert.equal(isEnclaveReadMode({}), false);
+  assert.equal(shouldUseEnclaveRead({ delivery: "personal_server" }, {}), false);
+  assert.equal(shouldUseEnclaveRead({ delivery: "enclave" }, {}), true);
+  assert.equal(
+    shouldUseEnclaveRead(
+      { delivery: "personal_server" },
+      { VANA_READ_MODE: "enclave" },
+    ),
+    true,
+  );
+  assert.equal(ENCLAVE_JOB_DEADLINE_SECONDS, 600);
+  assert.equal(ENCLAVE_POLL_TIMEOUT_MS, 20_000);
   assert.equal(ENCLAVE_READ_WAIT_SECONDS, 25);
   assert.equal(ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS, 5_000);
   assert.equal(ENCLAVE_READ_TIMEOUT_MS, 30_000);
@@ -416,6 +501,185 @@ test("reads an enclave scope through the injected jobs client", async () => {
     timeoutMs: 30_000,
   });
   assert.deepEqual(data, { "spotify.profile": { profile: { display_name: "Ada" } } });
+});
+
+test("returns running then completes the same enclave job across requests", async () => {
+  const store = createMemoryDeliveryStore();
+  const owner = `0x${"a".repeat(40)}`;
+  const grantId = `0x${"1".repeat(64)}`;
+  let submits = 0;
+  let waits = 0;
+  const jobsClientFactory: NonNullable<
+    Parameters<typeof readResumableEnclaveScopes>[0]["jobsClientFactory"]
+  > = () => ({
+    submitRawRead: async () => {
+      submits += 1;
+      return { jobId: "job-resume", state: "queued" };
+    },
+    getJob: async () => jobStatus("job-resume", "completed"),
+    waitForJob: async () => {
+      waits += 1;
+      if (waits === 1) {
+        throw new JobTimeoutError("short poll elapsed", {
+          jobId: "job-resume",
+          timeoutMs: ENCLAVE_POLL_TIMEOUT_MS,
+          state: "running",
+        });
+      }
+      return jobStatus("job-resume", "completed");
+    },
+    openResult: async () => jobResult("job-resume"),
+  });
+  const input = {
+    requestId: "dcr_resume",
+    gatewayUrl: "https://gateway.example",
+    chainId: 14800,
+    builderPrivateKey: `0x${"2".repeat(64)}`,
+    grantId,
+    scopes: ["spotify.profile"],
+    status: { ownerAddress: owner },
+    now: () => 1_000,
+    store,
+    jobsClientFactory,
+  };
+
+  assert.deepEqual(await readResumableEnclaveScopes(input), {
+    state: "running",
+    jobId: "job-resume",
+  });
+  assert.deepEqual(await store.readEnclaveJob("dcr_resume", 1_001), {
+    jobId: "job-resume",
+    scope: "spotify.profile",
+    submittedAt: 1_000,
+    deadlineAt: 601_000,
+    state: "queued",
+    expiresAt: 901_000,
+  });
+  assert.deepEqual(await readResumableEnclaveScopes(input), {
+    state: "completed",
+    data: { "spotify.profile": { profile: { display_name: "Ada" } } },
+  });
+  assert.equal(submits, 1);
+});
+
+test("retry resumes a bound running enclave job without submitting", async () => {
+  const store = createMemoryDeliveryStore();
+  await store.putEnclaveJob("dcr_running", {
+    jobId: "job-running",
+    scope: "spotify.profile",
+    submittedAt: 1_000,
+    deadlineAt: 601_000,
+    state: "running",
+    expiresAt: 901_000,
+  });
+  let submits = 0;
+  const outcome = await readResumableEnclaveScopes({
+    ...resumableReadInput("dcr_running", store),
+    jobsClientFactory: () => ({
+      submitRawRead: async () => {
+        submits += 1;
+        return { jobId: "unexpected", state: "queued" };
+      },
+      getJob: async () => jobStatus("job-running", "running"),
+      waitForJob: async () => {
+        throw new JobTimeoutError("short poll elapsed", {
+          jobId: "job-running",
+          timeoutMs: ENCLAVE_POLL_TIMEOUT_MS,
+          state: "running",
+        });
+      },
+      openResult: async () => jobResult("job-running"),
+    }),
+  });
+  assert.deepEqual(outcome, { state: "running", jobId: "job-running" });
+  assert.equal(submits, 0);
+});
+
+test("retry after a failed enclave job submits one replacement", async () => {
+  const store = createMemoryDeliveryStore();
+  await store.putEnclaveJob("dcr_failed", {
+    jobId: "job-failed",
+    scope: "spotify.profile",
+    submittedAt: 1_000,
+    deadlineAt: 601_000,
+    state: "failed",
+    expiresAt: 901_000,
+  });
+  let submits = 0;
+  const outcome = await readResumableEnclaveScopes({
+    ...resumableReadInput("dcr_failed", store),
+    jobsClientFactory: () => ({
+      submitRawRead: async () => {
+        submits += 1;
+        return { jobId: "job-retry", state: "queued" };
+      },
+      getJob: async () => jobStatus("job-retry", "queued"),
+      waitForJob: async () => {
+        throw new JobTimeoutError("short poll elapsed", {
+          jobId: "job-retry",
+          timeoutMs: ENCLAVE_POLL_TIMEOUT_MS,
+          state: "queued",
+        });
+      },
+      openResult: async () => jobResult("job-retry"),
+    }),
+  });
+  assert.deepEqual(outcome, { state: "running", jobId: "job-retry" });
+  assert.equal(submits, 1);
+});
+
+test("an expired enclave job renders the terminal failure copy", async () => {
+  const store = createMemoryDeliveryStore();
+  await store.putEnclaveJob("dcr_expired", {
+    jobId: "job-expired",
+    scope: "spotify.profile",
+    submittedAt: 1_000,
+    deadlineAt: 601_000,
+    state: "running",
+    expiresAt: 901_000,
+  });
+  await assert.rejects(
+    () =>
+      readResumableEnclaveScopes({
+        ...resumableReadInput("dcr_expired", store),
+        now: () => 601_000,
+        jobsClientFactory: () => ({
+          submitRawRead: async () => assert.fail("expired jobs fail before replacement"),
+          getJob: async () => assert.fail("expired jobs do not poll"),
+          waitForJob: async () => assert.fail("expired jobs do not poll"),
+          openResult: async () => assert.fail("expired jobs have no result"),
+        }),
+      }),
+    (error) => {
+      const mapped = mapClientError(error);
+      assert.equal(mapped.kind, "failed");
+      assert.equal(
+        readFailureCopy(mapped.kind === "failed" ? mapped.kind : undefined),
+        "That read failed, so no new page was added.",
+      );
+      return true;
+    },
+  );
+});
+
+test("client keeps the reading promise open while the enclave job runs", async () => {
+  assert.ok(
+    ENCLAVE_CLIENT_TIMEOUT_MS >= ENCLAVE_JOB_DEADLINE_SECONDS * 1_000,
+  );
+  const responses: unknown[] = [
+    { state: "running", jobId: "job-client" },
+    { scope: "spotify.profile", data: { kind: "quick" } },
+  ];
+  const sleeps: number[] = [];
+  const result = await pollLorebookResult(
+    async () => responses.shift(),
+    { sleep: async (milliseconds) => void sleeps.push(milliseconds) },
+  );
+  assert.deepEqual(result, {
+    scope: "spotify.profile",
+    data: { kind: "quick" },
+  });
+  assert.deepEqual(sleeps, [ENCLAVE_CLIENT_POLL_INTERVAL_MS]);
 });
 
 test("decodes the jobs result body as the direct-read JSON shape", () => {
@@ -656,6 +920,20 @@ test("carries a delivery capability between separate server instances", async ()
     scope: binding.scopes[0],
     data: DELIVERED_SNAPSHOT,
   });
+
+  const enclaveJob = {
+    jobId: "job-shared",
+    scope: binding.scopes[0]!,
+    submittedAt: Date.now(),
+    deadlineAt: Date.now() + 10 * 60 * 1_000,
+    state: "running" as const,
+    expiresAt: Date.now() + 15 * 60 * 1_000,
+  };
+  await delivering.putEnclaveJob(binding.requestId, enclaveJob);
+  assert.deepEqual(
+    await minting.readEnclaveJob(binding.requestId, Date.now()),
+    enclaveJob,
+  );
 });
 
 test("surfaces an unreachable delivery store instead of a silent refusal", async () => {

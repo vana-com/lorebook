@@ -1,12 +1,34 @@
+import {
+  JobRejectedError,
+  JobTimeoutError,
+} from "@opendatalabs/vana-sdk";
 import { createJobsClient } from "@opendatalabs/vana-sdk/protocol/jobs-client";
+import type {
+  JobResult,
+  JobState,
+  JobStatus,
+} from "@opendatalabs/vana-sdk/protocol/jobs";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
+import {
+  getDeliveryStore,
+  type DeliveryStore,
+} from "./delivery-store";
 
 const GRANT_ID_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 const LOOPBACK_GATEWAY_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+export const ENCLAVE_JOB_DEADLINE_SECONDS = 600;
+export const ENCLAVE_POLL_TIMEOUT_MS = 20_000;
+export const ENCLAVE_POLL_INTERVAL_MS = 2_000;
 export const ENCLAVE_READ_WAIT_SECONDS = 25;
 export const ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS = 5_000;
 export const ENCLAVE_READ_TIMEOUT_MS =
   60_000 - ENCLAVE_READ_WAIT_SECONDS * 1_000 - ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS;
+const ENCLAVE_JOB_RETENTION_MS = 5 * 60 * 1_000;
+const TERMINAL_FAILURE_STATES = new Set<JobState>([
+  "failed",
+  "expired",
+  "cancelled",
+]);
 
 export class EnclaveReadError extends Error {
   constructor(
@@ -22,6 +44,13 @@ export function isEnclaveReadMode(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   return env.VANA_READ_MODE?.trim().toLowerCase() === "enclave";
+}
+
+export function shouldUseEnclaveRead(
+  status: { delivery?: string },
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return isEnclaveReadMode(env) || status.delivery === "enclave";
 }
 
 export function approvedEnclaveScopes(
@@ -132,6 +161,126 @@ export function decodeEnclaveResult(result: {
   }
 }
 
+export type EnclaveReadOutcome =
+  | { state: "running"; jobId: string }
+  | { state: "completed"; data: Record<string, unknown> };
+
+export async function readResumableEnclaveScopes(input: {
+  requestId: string;
+  gatewayUrl: string;
+  chainId: number;
+  builderPrivateKey: string;
+  grantId: string;
+  scopes: readonly string[];
+  status?: unknown;
+  fetchFn?: typeof fetch;
+  now?: () => number;
+  store?: DeliveryStore;
+  jobsClientFactory?: (
+    options: Parameters<typeof createJobsClient>[0],
+  ) => Pick<
+    ReturnType<typeof createJobsClient>,
+    "submitRawRead" | "getJob" | "waitForJob" | "openResult"
+  >;
+}): Promise<EnclaveReadOutcome> {
+  const gatewayUrl = gatewayOrigin(input.gatewayUrl);
+  if (!GRANT_ID_PATTERN.test(input.grantId)) {
+    throw new EnclaveReadError("The approved grant id is invalid.", 502);
+  }
+  if (input.scopes.length !== 1 || !input.scopes[0]) {
+    throw new EnclaveReadError("Lorebook requires exactly one approved data type.", 400);
+  }
+  const scope = input.scopes[0];
+  const now = input.now ?? Date.now;
+  const store = input.store ?? getDeliveryStore();
+  const client = (input.jobsClientFactory ?? createJobsClient)({
+    gatewayUrl,
+    chainId: input.chainId,
+    builderPrivateKey: input.builderPrivateKey as Hex,
+  });
+
+  let stored = await store.readEnclaveJob(input.requestId, now());
+  let inlineJob: JobStatus | undefined;
+  if (!stored || stored.scope !== scope || TERMINAL_FAILURE_STATES.has(stored.state)) {
+    const owner = await resolveGrantOwner({
+      gatewayUrl,
+      grantId: input.grantId,
+      status: input.status,
+      fetchFn: input.fetchFn,
+    });
+    const submittedAt = now();
+    const submitted = await client.submitRawRead({
+      owner,
+      grantId: input.grantId as Hex,
+      scope,
+      deadlineSeconds: ENCLAVE_JOB_DEADLINE_SECONDS,
+      wait: 0,
+    });
+    stored = {
+      jobId: submitted.jobId,
+      scope,
+      submittedAt,
+      deadlineAt: submittedAt + ENCLAVE_JOB_DEADLINE_SECONDS * 1_000,
+      state: submitted.state,
+      expiresAt:
+        submittedAt +
+        ENCLAVE_JOB_DEADLINE_SECONDS * 1_000 +
+        ENCLAVE_JOB_RETENTION_MS,
+    };
+    // Persist immediately after submission so the next function invocation
+    // resumes this exact job rather than minting another UUID.
+    await store.putEnclaveJob(input.requestId, stored);
+    inlineJob = submitted.job;
+  }
+
+  if (stored.state !== "completed" && now() >= stored.deadlineAt) {
+    const expired = { ...stored, state: "expired" as const };
+    await store.putEnclaveJob(input.requestId, expired);
+    throw terminalJobError(expired.jobId, expired.state);
+  }
+
+  let job: JobStatus;
+  if (inlineJob && isTerminalJob(inlineJob)) {
+    job = inlineJob;
+  } else if (stored.state === "completed") {
+    job = await client.getJob(stored.jobId);
+  } else {
+    try {
+      job = await client.waitForJob(stored.jobId, {
+        timeoutMs: ENCLAVE_POLL_TIMEOUT_MS,
+        pollMs: ENCLAVE_POLL_INTERVAL_MS,
+      });
+    } catch (error) {
+      if (error instanceof JobTimeoutError) {
+        return { state: "running", jobId: stored.jobId };
+      }
+      throw error;
+    }
+  }
+
+  stored = { ...stored, state: job.state };
+  await store.putEnclaveJob(input.requestId, stored);
+  if (job.state !== "completed") {
+    throw terminalJobError(job.jobId, job.state, job.failureReason);
+  }
+  if (!job.result) {
+    throw new JobRejectedError(
+      "Completed job status does not include a result handle",
+      undefined,
+      null,
+      { jobId: job.jobId, state: job.state },
+    );
+  }
+  const result: JobResult = await client.openResult(job.result, {
+    expect: { jobId: job.jobId, scope },
+  });
+  return {
+    state: "completed",
+    data: { [scope]: decodeEnclaveResult(result) },
+  };
+}
+
+/** Blocking helper retained for the command-line diagnostic script. */
 export async function readEnclaveScopes(input: {
   gatewayUrl: string;
   chainId: number;
@@ -171,6 +320,27 @@ export async function readEnclaveScopes(input: {
     data[scope] = decodeEnclaveResult(result);
   }
   return data;
+}
+
+function isTerminalJob(job: JobStatus): boolean {
+  return job.state === "completed" || TERMINAL_FAILURE_STATES.has(job.state);
+}
+
+function terminalJobError(
+  jobId: string,
+  state: JobState,
+  failureReason?: string | null,
+): JobRejectedError {
+  return new JobRejectedError(
+    `Job ${jobId} ended in state ${state}${failureReason ? `: ${failureReason}` : ""}`,
+    undefined,
+    null,
+    {
+      jobId,
+      state,
+      ...(failureReason ? { failureReason } : {}),
+    },
+  );
 }
 
 function ownerAddressFrom(value: unknown): Address | null {

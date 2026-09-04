@@ -20,6 +20,10 @@ import {
 
 type ErrorBody = { kind?: unknown; error?: unknown; detail?: unknown };
 type LorebookErrorKind = "empty" | "failed" | "unavailable";
+type RunningRead = { state: "running"; jobId: string };
+
+export const ENCLAVE_CLIENT_POLL_INTERVAL_MS = 2_500;
+export const ENCLAVE_CLIENT_TIMEOUT_MS = 630_000;
 
 class LorebookRequestError extends Error {
   constructor(
@@ -86,12 +90,74 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function readLorebookResult(path: string): Promise<ApprovedDataResult<LorebookSnapshot>> {
-  const result = await jsonFetch<ApprovedDataResult<LorebookSnapshot>>(path);
-  if (!isRecord(result) || !isRecord(result.data)) {
-    throw new LorebookRequestError("The read returned no data.", "empty");
+export async function pollLorebookResult<T>(
+  read: () => Promise<unknown>,
+  options: {
+    now?: () => number;
+    sleep?: (milliseconds: number) => Promise<void>;
+    timeoutMs?: number;
+  } = {},
+): Promise<ApprovedDataResult<T>> {
+  const now = options.now ?? Date.now;
+  const sleep =
+    options.sleep ??
+    ((milliseconds: number) =>
+      new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds)));
+  const timeoutMs = options.timeoutMs ?? ENCLAVE_CLIENT_TIMEOUT_MS;
+  const startedAt = now();
+
+  for (;;) {
+    const result = await read();
+    if (!isRunningRead(result)) {
+      if (
+        !isRecord(result) ||
+        typeof result.scope !== "string" ||
+        !isRecord(result.data)
+      ) {
+        throw new LorebookRequestError("The read returned no data.", "empty");
+      }
+      return result as unknown as ApprovedDataResult<T>;
+    }
+    const remaining = timeoutMs - (now() - startedAt);
+    if (remaining <= 0) {
+      throw new LorebookRequestError(
+        "The enclave read timed out. Retry in a moment.",
+        "unavailable",
+      );
+    }
+    await sleep(Math.min(ENCLAVE_CLIENT_POLL_INTERVAL_MS, remaining));
   }
-  return result;
+}
+
+async function readLorebookResult(path: string): Promise<ApprovedDataResult<LorebookSnapshot>> {
+  return pollLorebookResult(() => jsonFetch<unknown>(path));
+}
+
+function isRunningRead(value: unknown): value is RunningRead {
+  return (
+    isRecord(value) &&
+    value.state === "running" &&
+    typeof value.jobId === "string" &&
+    value.jobId.length > 0
+  );
+}
+
+export function readFailureCopy(
+  kind: LorebookErrorKind | undefined,
+  hasDetail = false,
+): string {
+  if (kind === "empty") {
+    return "That read finished without anything to show. No new page was added.";
+  }
+  if (kind === "failed") {
+    return hasDetail
+      ? "That read failed, so no new page was added. You can find what happened in Connection details."
+      : "That read failed, so no new page was added.";
+  }
+  if (kind === "unavailable") {
+    return "We couldn’t reach your data just now. No new page was added.";
+  }
+  return "We couldn’t finish that page. No new data was added.";
 }
 
 export function LorebookApp({
@@ -463,13 +529,9 @@ function statusCopy(state: ReturnType<typeof useDirectVanaConnect<LorebookSnapsh
   if (type === "reading") return "Reading only what you approved…";
   if (type === "error") {
     if (state.error instanceof LorebookRequestError) {
-      if (state.error.kind === "empty") return "That read finished without anything to show. No new page was added.";
-      if (state.error.kind === "failed") return state.error.detail
-        ? "That read failed, so no new page was added. You can find what happened in Connection details."
-        : "That read failed, so no new page was added.";
-      if (state.error.kind === "unavailable") return "We couldn’t reach your data just now. No new page was added.";
+      return readFailureCopy(state.error.kind, Boolean(state.error.detail));
     }
-    return "We couldn’t finish that page. No new data was added.";
+    return readFailureCopy(undefined);
   }
   return "";
 }
