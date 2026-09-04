@@ -8,6 +8,10 @@ export type VanaRuntime = {
   network: "moksha" | "mainnet";
 };
 
+export function chainIdForNetwork(network: VanaRuntime["network"]): 1480 | 14800 {
+  return network === "mainnet" ? 1480 : 14800;
+}
+
 /** The two runtime pairings Lorebook is exercised against, as testers see them. */
 export type RuntimeOptionId = "testnet" | "mainnet";
 

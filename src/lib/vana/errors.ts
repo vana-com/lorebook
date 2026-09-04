@@ -1,10 +1,23 @@
 import {
+  BuilderUnknownError,
+  GrantInvalidError,
+  JobEnvelopeError,
+  JobsClientError,
+  JobNotFoundError,
+  JobRejectedError,
+  JobRequestTooLargeError,
+  JobTimeoutError,
+  JobTransportError,
+  OwnerNotReadyError,
+} from "@opendatalabs/vana-sdk";
+import {
   AccessNotApprovedError,
   DirectConfigError,
   PaymentRequiredError,
   PersonalServerReadError,
 } from "@opendatalabs/vana-sdk/server";
 import { DeliveryStoreError } from "./delivery-store";
+import { EnclaveReadError } from "./enclave";
 import { LaunchRuntimeError } from "./runtime";
 
 export type ClientErrorKind =
@@ -44,6 +57,72 @@ export function mapClientError(error: unknown): ClientError {
       error: "The mobile delivery store is unavailable. Retry in a moment.",
       status: 503,
     };
+  }
+  if (error instanceof OwnerNotReadyError) {
+    return {
+      kind: "not_ready",
+      error: "The Personal Server enclave is not ready yet. Retry in a moment.",
+      status: 409,
+    };
+  }
+  if (error instanceof GrantInvalidError) {
+    return {
+      kind: "failed",
+      error: "The approved grant does not permit this enclave read.",
+      status: 403,
+    };
+  }
+  if (error instanceof BuilderUnknownError) {
+    return {
+      kind: "failed",
+      error: "This app is not registered with the Enclave Gateway.",
+      status: 403,
+    };
+  }
+  if (error instanceof JobTimeoutError) {
+    return {
+      kind: "unavailable",
+      error: "The enclave read timed out. Retry in a moment.",
+      status: 504,
+    };
+  }
+  if (error instanceof JobNotFoundError) {
+    return {
+      kind: "unavailable",
+      error: "The enclave read job could not be found.",
+      status: 502,
+    };
+  }
+  if (error instanceof JobRequestTooLargeError) {
+    return {
+      kind: "failed",
+      error: "The enclave read request is too large.",
+      status: 413,
+    };
+  }
+  if (error instanceof JobTransportError) {
+    return {
+      kind: "unavailable",
+      error: "The Enclave Gateway is temporarily unavailable.",
+      status: 503,
+    };
+  }
+  if (error instanceof JobEnvelopeError || error instanceof JobRejectedError) {
+    return {
+      kind: "failed",
+      error: "The Enclave Gateway returned an invalid read result.",
+      status: 502,
+    };
+  }
+  if (error instanceof JobsClientError) {
+    return {
+      kind: "failed",
+      error: "The Enclave Gateway rejected the read job.",
+      status: error.status ?? 502,
+    };
+  }
+  if (error instanceof EnclaveReadError) {
+    return { kind: "failed", error: error.message, status: error.status };
   }
   if (error instanceof PersonalServerReadError || hasNetworkError(error)) {
     return {

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  GrantInvalidError,
+  JobTimeoutError,
+  OwnerNotReadyError,
+} from "@opendatalabs/vana-sdk";
+import {
   AccessNotApprovedError,
   getDirectEndpoints,
   PaymentRequiredError,
@@ -42,10 +47,17 @@ import {
 import {
   resolveFixtureJourney,
   resolveLaunchRuntime,
+  chainIdForNetwork,
   runtimeOptionId,
   RUNTIME_OPTIONS,
 } from "../src/lib/vana/runtime";
 import { directEndpointOverrides } from "../src/lib/vana/endpoints";
+import {
+  decodeEnclaveResult,
+  gatewayOrigin,
+  isEnclaveReadMode,
+  resolveGrantOwner,
+} from "../src/lib/vana/enclave";
 
 const SECRET = `0x${"1".repeat(64)}`;
 const ORIGIN = "https://snapshot.example";
@@ -168,6 +180,62 @@ test("applies only configured Direct endpoint overrides", () => {
       accessRequestBaseUrl: "http://localhost:3083",
       approvalAppBaseUrl: "http://localhost:3083",
     },
+  );
+});
+
+test("keeps enclave reads opt-in and resolves protocol chain ids", () => {
+  assert.equal(isEnclaveReadMode({}), false);
+  assert.equal(isEnclaveReadMode({ VANA_READ_MODE: "enclave" }), true);
+  assert.equal(chainIdForNetwork("mainnet"), 1480);
+  assert.equal(chainIdForNetwork("moksha"), 14800);
+});
+
+test("requires a bare Gateway origin", () => {
+  assert.equal(gatewayOrigin("https://gateway.example"), "https://gateway.example");
+  assert.throws(() => gatewayOrigin(undefined), /VANA_GATEWAY_URL/);
+  assert.throws(() => gatewayOrigin("https://gateway.example/v1"), /bare HTTP or HTTPS origin/);
+});
+
+test("prefers a status owner and otherwise resolves the grantor from the Gateway", async () => {
+  const grantId = `0x${"1".repeat(64)}`;
+  const statusOwner = `0x${"a".repeat(40)}`;
+  let fetched = false;
+  const resolvedStatusOwner = await resolveGrantOwner({
+    gatewayUrl: "https://gateway.example",
+    grantId,
+    status: { userAddress: statusOwner },
+    fetchFn: async () => {
+      fetched = true;
+      return Response.json({});
+    },
+  });
+  assert.equal(resolvedStatusOwner.toLowerCase(), statusOwner);
+  assert.equal(fetched, false);
+
+  const grantor = `0x${"b".repeat(40)}`;
+  const resolvedGrantor = await resolveGrantOwner({
+    gatewayUrl: "https://gateway.example",
+    grantId,
+    fetchFn: async (url) => {
+      assert.equal(url, `https://gateway.example/v1/grants/${grantId}`);
+      return Response.json({ data: { grantorAddress: grantor } });
+    },
+  });
+  assert.equal(resolvedGrantor.toLowerCase(), grantor);
+});
+
+test("decodes the jobs result body as the direct-read JSON shape", () => {
+  const payload = { profile: { display_name: "Ada" } };
+  assert.deepEqual(
+    decodeEnclaveResult({
+      contentType: "application/json; charset=utf-8",
+      body: Buffer.from(JSON.stringify(payload)).toString("base64"),
+    }),
+    payload,
+  );
+  assert.throws(
+    () => decodeEnclaveResult({ contentType: "text/plain", body: "e30=" }),
+    /unsupported content type/,
   );
 });
 
@@ -449,6 +517,16 @@ test("blocks reads until the grant covering all scopes is ready", () => {
   };
   assert.doesNotThrow(() => assertGrantReadReady(ready));
   assert.doesNotThrow(() =>
+    assertGrantReadReady(
+      {
+        status: "approved",
+        grantId: "0xgrant",
+        scopes: ["spotify.profile"],
+      },
+      { requirePersonalServerUrl: false },
+    ),
+  );
+  assert.doesNotThrow(() =>
     assertGrantReadReady({ ...ready, status: "approved", scope: "spotify.profile" }),
   );
   // Not-yet-approved, or approved but missing grant/PS routing, must block.
@@ -542,6 +620,21 @@ test("maps SDK and unknown failures to sanitized client errors", () => {
     kind: "unavailable",
     error: "The Personal Server is temporarily unavailable.",
     status: 503,
+  });
+  assert.deepEqual(mapClientError(new OwnerNotReadyError("private readiness detail")), {
+    kind: "not_ready",
+    error: "The Personal Server enclave is not ready yet. Retry in a moment.",
+    status: 409,
+  });
+  assert.deepEqual(mapClientError(new GrantInvalidError("private grant detail")), {
+    kind: "failed",
+    error: "The approved grant does not permit this enclave read.",
+    status: 403,
+  });
+  assert.deepEqual(mapClientError(new JobTimeoutError("private timeout detail")), {
+    kind: "unavailable",
+    error: "The enclave read timed out. Retry in a moment.",
+    status: 504,
   });
   assert.deepEqual(mapClientError(new Error("private internal detail")), {
     kind: "failed",

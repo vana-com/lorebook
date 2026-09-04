@@ -18,7 +18,8 @@ import { resolveAppUrl } from "./app-url";
 import { assertGrantReadReady } from "./capability";
 import { LOREBOOK_QUICK_APP, type VanaAppDefinition } from "./constants";
 import { directEndpointOverrides } from "./endpoints";
-import type { VanaRuntime } from "./runtime";
+import { isEnclaveReadMode, readEnclaveScopes } from "./enclave";
+import { chainIdForNetwork, type VanaRuntime } from "./runtime";
 
 type Controller = ReturnType<typeof createDirectDataController>;
 
@@ -86,13 +87,31 @@ export async function readApprovedScopes(
   requestId: string,
 ): Promise<{ scope: string; data: LorebookSnapshot }> {
   const status = await controller.getAccessRequestStatus(requestId);
-  assertGrantReadReady(status);
-  // assertGrantReadReady guarantees both are present.
-  const personalServerUrl = status.personalServerUrl as string;
+  const enclaveMode = isEnclaveReadMode();
+  assertGrantReadReady(status, { requirePersonalServerUrl: !enclaveMode });
+  // Readiness guarantees the fields required by the selected transport.
   const grantId = status.grantId as string;
 
-  const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
   const chainId = chainIdForNetwork(runtime.network);
+  if (app.scopes.length !== 1 || !app.scopes[0]) {
+    throw new PersonalServerReadError("Lorebook requires exactly one approved data type.", 400);
+  }
+  const scope = app.scopes[0];
+  if (enclaveMode) {
+    const dataByScope = await readEnclaveScopes({
+      gatewayUrl: process.env.VANA_GATEWAY_URL ?? "",
+      chainId,
+      builderPrivateKey: config.appPrivateKey,
+      grantId,
+      scopes: approvedScopes(status, app),
+      status,
+    });
+    return {
+      scope: status.scope ?? scope,
+      data: mapLorebookSnapshot(app, scope, dataByScope[scope]),
+    };
+  }
+  const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
   const endpoints = getDirectEndpoints(runtime.env);
   const escrow: EscrowPaymentConfig = {
     client: createEscrowGatewayClient(endpoints.escrowGatewayUrl),
@@ -101,13 +120,8 @@ export async function readApprovedScopes(
     signTypedData: account.signTypedData,
   };
   const signMessage = (message: string) => account.signMessage({ message });
-
-  if (app.scopes.length !== 1 || !app.scopes[0]) {
-    throw new PersonalServerReadError("Lorebook requires exactly one approved data type.", 400);
-  }
-  const scope = app.scopes[0];
   const result = await readPersonalServerData({
-    personalServerUrl,
+    personalServerUrl: status.personalServerUrl as string,
     scope,
     grantId,
     payerAddress: account.address,
@@ -153,8 +167,18 @@ export async function readForegroundDeliveredScopes(
     throw new PersonalServerReadError("Lorebook requires its exact approved data type.", 400);
   }
   const scope = input.scopes[0];
-  const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
   const chainId = chainIdForNetwork(runtime.network);
+  if (isEnclaveReadMode()) {
+    const dataByScope = await readEnclaveScopes({
+      gatewayUrl: process.env.VANA_GATEWAY_URL ?? "",
+      chainId,
+      builderPrivateKey: config.appPrivateKey,
+      grantId: input.grantId,
+      scopes: input.scopes,
+    });
+    return { scope, data: mapLorebookSnapshot(app, scope, dataByScope[scope]) };
+  }
+  const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
   const endpoints = getDirectEndpoints(runtime.env);
   const escrow: EscrowPaymentConfig = {
     client: createEscrowGatewayClient(endpoints.escrowGatewayUrl),
@@ -193,8 +217,21 @@ async function acknowledgeRead(
   await accessRequestClient.acknowledgeRead?.(requestId);
 }
 
-// Protocol chain id per network: Vana mainnet 1480, Moksha testnet 14800 —
-// the keys present in CONTRACTS.*.addresses.
-function chainIdForNetwork(network: VanaRuntime["network"]): 1480 | 14800 {
-  return network === "mainnet" ? 1480 : 14800;
+function approvedScopes(
+  status: Awaited<ReturnType<Controller["getAccessRequestStatus"]>>,
+  app: VanaAppDefinition,
+): string[] {
+  const approved = status.scopes?.length
+    ? status.scopes
+    : status.scope
+      ? [status.scope]
+      : [...app.scopes];
+  const requested = app.scopes.filter((scope) => approved.includes(scope));
+  if (requested.length !== app.scopes.length) {
+    throw new PersonalServerReadError(
+      "The approved grant does not cover Lorebook's requested data type.",
+      403,
+    );
+  }
+  return requested;
 }
