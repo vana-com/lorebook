@@ -18,7 +18,10 @@ import { resolveAppUrl } from "./app-url";
 import type { RequestBinding } from "./binding";
 import { assertGrantReadReady } from "./capability";
 import { LOREBOOK_QUICK_APP, type VanaAppDefinition } from "./constants";
-import { directEndpointOverrides } from "./endpoints";
+import {
+  applyDirectEndpointOverrides,
+  directEndpointOverrides,
+} from "./endpoints";
 import {
   approvedEnclaveScopes,
   isEnclaveReadMode,
@@ -108,7 +111,7 @@ export async function readApprovedScopes(
   }
   const scope = app.scopes[0];
   const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
-  const endpoints = getDirectEndpoints(runtime.env);
+  const endpoints = applyDirectEndpointOverrides(getDirectEndpoints(runtime.env));
   const signMessage = (message: string) => account.signMessage({ message });
   const acknowledge = () => acknowledgeRead(binding.requestId, account, endpoints);
   const onAcknowledgeError = (error: unknown) =>
@@ -186,7 +189,7 @@ export async function readForegroundDeliveredScopes(
   const scope = input.scopes[0];
   const chainId = chainIdForNetwork(runtime.network);
   const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
-  const endpoints = getDirectEndpoints(runtime.env);
+  const endpoints = applyDirectEndpointOverrides(getDirectEndpoints(runtime.env));
   return readThenAcknowledge({
     read: async () => {
       if (isEnclaveReadMode()) {

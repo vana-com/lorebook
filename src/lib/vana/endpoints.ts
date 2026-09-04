@@ -14,3 +14,12 @@ export function directEndpointOverrides(
     ...(approvalAppBaseUrl ? { approvalAppBaseUrl } : {}),
   };
 }
+
+export function applyDirectEndpointOverrides<
+  T extends { accessRequestBaseUrl: string; approvalAppBaseUrl: string },
+>(
+  defaults: T,
+  env: Record<string, string | undefined> = process.env,
+): T {
+  return { ...defaults, ...directEndpointOverrides(env) };
+}

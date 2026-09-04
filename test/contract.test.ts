@@ -68,7 +68,10 @@ import {
   runtimeOptionId,
   RUNTIME_OPTIONS,
 } from "../src/lib/vana/runtime";
-import { directEndpointOverrides } from "../src/lib/vana/endpoints";
+import {
+  applyDirectEndpointOverrides,
+  directEndpointOverrides,
+} from "../src/lib/vana/endpoints";
 import {
   approvedEnclaveScopes,
   decodeEnclaveResult,
@@ -315,6 +318,24 @@ test("applies only configured Direct endpoint overrides", () => {
     {
       accessRequestBaseUrl: "http://localhost:3083",
       approvalAppBaseUrl: "http://localhost:3083",
+    },
+  );
+  assert.deepEqual(
+    applyDirectEndpointOverrides(
+      {
+        accessRequestBaseUrl: "https://access.default",
+        approvalAppBaseUrl: "https://approval.default",
+        escrowGatewayUrl: "https://escrow.default",
+      },
+      {
+        VANA_ACCESS_REQUEST_BASE_URL: "https://access.override",
+        VANA_APPROVAL_APP_BASE_URL: "https://approval.override",
+      },
+    ),
+    {
+      accessRequestBaseUrl: "https://access.override",
+      approvalAppBaseUrl: "https://approval.override",
+      escrowGatewayUrl: "https://escrow.default",
     },
   );
 });
