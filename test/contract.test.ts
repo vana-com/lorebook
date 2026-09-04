@@ -49,6 +49,7 @@ import {
 import {
   resolveFixtureJourney,
   resolveLaunchRuntime,
+  resolveVanaDefaultEnv,
   resolveVanaDefaultNetwork,
   chainIdForNetwork,
   runtimeOptionId,
@@ -123,6 +124,28 @@ test("uses the validated server network default while query parameters win", () 
         VANA_GATEWAY_URL: "https://gateway-moksha.example",
       }),
     /mainnet.*Moksha Gateway/,
+  );
+});
+
+test("uses the validated server environment default while query parameters win", () => {
+  const defaultEnv = resolveVanaDefaultEnv({ VANA_DEFAULT_ENV: "dev" });
+  assert.equal(defaultEnv, "dev");
+  assert.deepEqual(
+    resolveLaunchRuntime(new URLSearchParams(), "moksha", defaultEnv),
+    { env: "dev", network: "moksha" },
+  );
+  assert.deepEqual(
+    resolveLaunchRuntime(
+      new URLSearchParams("vana_env=production"),
+      "moksha",
+      defaultEnv,
+    ),
+    { env: "production", network: "moksha" },
+  );
+  assert.equal(resolveVanaDefaultEnv({}), "production");
+  assert.throws(
+    () => resolveVanaDefaultEnv({ VANA_DEFAULT_ENV: "staging" }),
+    /Invalid VANA_DEFAULT_ENV/,
   );
 });
 

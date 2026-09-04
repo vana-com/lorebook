@@ -1,8 +1,14 @@
 import { LorebookApp } from "@/components/LorebookApp";
-import { resolveVanaDefaultNetwork } from "@/lib/vana/runtime";
+import {
+  resolveVanaDefaultEnv,
+  resolveVanaDefaultNetwork,
+} from "@/lib/vana/runtime";
 
 export default function Home() {
   return (
-    <LorebookApp defaultNetwork={resolveVanaDefaultNetwork(process.env)} />
+    <LorebookApp
+      defaultEnv={resolveVanaDefaultEnv(process.env)}
+      defaultNetwork={resolveVanaDefaultNetwork(process.env)}
+    />
   );
 }

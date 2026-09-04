@@ -65,8 +65,10 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function LorebookApp({
+  defaultEnv,
   defaultNetwork,
 }: {
+  defaultEnv: VanaRuntime["env"];
   defaultNetwork: VanaRuntime["network"];
 }) {
   const [mode, setMode] = useState<LorebookJourney>("quick");
@@ -97,7 +99,7 @@ export function LorebookApp({
 
   return (
     <main className="lorebook-shell">
-      <NetworkSwitch defaultNetwork={defaultNetwork} />
+      <NetworkSwitch defaultEnv={defaultEnv} defaultNetwork={defaultNetwork} />
 
       <header className="site-header">
         <span className="brand">
@@ -163,6 +165,7 @@ export function LorebookApp({
           <ConnectAction
             connect={connect}
             mode={mode}
+            defaultEnv={defaultEnv}
             defaultNetwork={defaultNetwork}
           />
         </div>
@@ -183,8 +186,10 @@ export function LorebookApp({
  * dropped with it.
  */
 function NetworkSwitch({
+  defaultEnv,
   defaultNetwork,
 }: {
+  defaultEnv: VanaRuntime["env"];
   defaultNetwork: VanaRuntime["network"];
 }) {
   const [runtime, setRuntime] = useState<VanaRuntime | "invalid" | null>(null);
@@ -193,12 +198,18 @@ function NetworkSwitch({
   useEffect(() => {
     const search = window.location.search;
     try {
-      setRuntime(resolveLaunchRuntime(new URLSearchParams(search), defaultNetwork));
+      setRuntime(
+        resolveLaunchRuntime(
+          new URLSearchParams(search),
+          defaultNetwork,
+          defaultEnv,
+        ),
+      );
     } catch {
       setRuntime("invalid");
     }
     if (isDesktopFixtureSearch(search)) setJourney("desktop-saved-tracks");
-  }, [defaultNetwork]);
+  }, [defaultEnv, defaultNetwork]);
 
   const selected = runtime && runtime !== "invalid" ? runtimeOptionId(runtime) : null;
   const tone = runtime === null ? "pending" : selected ?? "custom";
@@ -310,10 +321,12 @@ function Metric({ value, label }: { value: number | null; label: string }) {
 function ConnectAction({
   connect,
   mode,
+  defaultEnv,
   defaultNetwork,
 }: {
   connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>;
   mode: LorebookJourney;
+  defaultEnv: VanaRuntime["env"];
   defaultNetwork: VanaRuntime["network"];
 }) {
   const state = connect.state;
@@ -376,7 +389,7 @@ function ConnectAction({
       {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
       <details className="connection-details">
         <summary>Connection details</summary>
-        <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div><RuntimeDetails defaultNetwork={defaultNetwork} /></dl>
+        <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div><RuntimeDetails defaultEnv={defaultEnv} defaultNetwork={defaultNetwork} /></dl>
       </details>
     </div>
   );
@@ -394,9 +407,15 @@ function statusCopy(type: string, hasMobileContinuation: boolean, hasApprovalRec
   return "";
 }
 
-function RuntimeDetails({ defaultNetwork }: { defaultNetwork: VanaRuntime["network"] }) {
+function RuntimeDetails({
+  defaultEnv,
+  defaultNetwork,
+}: {
+  defaultEnv: VanaRuntime["env"];
+  defaultNetwork: VanaRuntime["network"];
+}) {
   const [runtime, setRuntime] = useState<VanaRuntime | "invalid">({
-    env: "production",
+    env: defaultEnv,
     network: defaultNetwork,
   });
   useEffect(() => {
@@ -405,12 +424,13 @@ function RuntimeDetails({ defaultNetwork }: { defaultNetwork: VanaRuntime["netwo
         resolveLaunchRuntime(
           new URLSearchParams(window.location.search),
           defaultNetwork,
+          defaultEnv,
         ),
       );
     } catch {
       setRuntime("invalid");
     }
-  }, [defaultNetwork]);
+  }, [defaultEnv, defaultNetwork]);
   if (runtime === "invalid") return <div><dt>Runtime</dt><dd>invalid</dd></div>;
   return <><div><dt>Environment</dt><dd>{runtime.env}</dd></div><div><dt>Network</dt><dd>{runtime.network}</dd></div></>;
 }
