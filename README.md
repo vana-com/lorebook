@@ -171,6 +171,36 @@ authorization it needs to poll status and read for the whole request lifetime.
 
 Lorebook stores no browser pending request. The originating tab owns create and poll.
 
+## Enclave read mode (preview)
+
+The preview jobs path is opt-in. With `VANA_READ_MODE=enclave`, Lorebook keeps the existing Direct
+DCR creation and status polling, then submits each approved scope to the Node-only SDK jobs client.
+The server resolves the grant owner from the status when available or from the Gateway's public
+grant endpoint, decrypts the jobs result, and feeds the decoded JSON through the existing Lorebook
+rendering. Enclave mode does not use escrow or send a consumer acknowledgement. With the flag unset,
+the production direct-read behavior is unchanged.
+
+Configure the preview locally without committing real endpoints or keys:
+
+```dotenv
+VANA_READ_MODE=enclave
+VANA_GATEWAY_URL=https://gateway-preview.example
+VANA_ACCESS_REQUEST_BASE_URL=http://approval-preview.example
+VANA_APPROVAL_APP_BASE_URL=http://approval-preview.example
+```
+
+`VANA_GATEWAY_URL` must be a bare origin. To inspect an already-approved scope without the UI, use
+the CLI; it defaults to Moksha (`VANA_NETWORK=moksha`) and prints only the decrypted result:
+
+```bash
+GRANT_ID=0x... \
+SCOPE=spotify.profile \
+VANA_GATEWAY_URL=https://gateway-preview.example \
+VANA_PRIVATE_KEY=0x... \
+VANA_NETWORK=moksha \
+pnpm enclave:read
+```
+
 ## Verification
 
 ```bash

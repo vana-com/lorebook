@@ -11,6 +11,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "enclave:read": "tsx scripts/enclave-read.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "next typegen && tsc --noEmit"
   },
