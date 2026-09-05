@@ -1,11 +1,30 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  GrantInvalidError,
+  JobNotFoundError,
+  JobRejectedError,
+  JobTimeoutError,
+  OwnerNotReadyError,
+} from "@opendatalabs/vana-sdk";
+import {
   AccessNotApprovedError,
   getDirectEndpoints,
   PaymentRequiredError,
   PersonalServerReadError,
 } from "@opendatalabs/vana-sdk/server";
+import type {
+  JobResult,
+  JobState,
+  JobStatus,
+} from "@opendatalabs/vana-sdk/protocol/jobs";
+import { getAddress } from "viem";
+import {
+  ENCLAVE_CLIENT_POLL_INTERVAL_MS,
+  ENCLAVE_CLIENT_TIMEOUT_MS,
+  pollLorebookResult,
+  readFailureCopy,
+} from "../src/components/LorebookApp";
 import { resolveAppUrl } from "../src/lib/vana/app-url";
 import {
   createRequestBinding,
@@ -25,6 +44,7 @@ import {
   createRedisDeliveryStore,
   DeliveryStoreError,
   resolveDeliveryStore,
+  type DeliveryStore,
 } from "../src/lib/vana/delivery-store";
 import {
   consumeForegroundDelivery,
@@ -42,12 +62,94 @@ import {
 import {
   resolveFixtureJourney,
   resolveLaunchRuntime,
+  resolveVanaDefaultEnv,
+  resolveVanaDefaultNetwork,
+  chainIdForNetwork,
   runtimeOptionId,
   RUNTIME_OPTIONS,
 } from "../src/lib/vana/runtime";
+import {
+  applyDirectEndpointOverrides,
+  directEndpointOverrides,
+} from "../src/lib/vana/endpoints";
+import {
+  approvedEnclaveScopes,
+  decodeEnclaveResult,
+  ENCLAVE_JOB_DEADLINE_SECONDS,
+  ENCLAVE_POLL_TIMEOUT_MS,
+  ENCLAVE_READ_TIMEOUT_MS,
+  ENCLAVE_READ_WAIT_SECONDS,
+  ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS,
+  EnclaveReadError,
+  gatewayOrigin,
+  isEnclaveReadMode,
+  readEnclaveScopes,
+  readResumableEnclaveScopes,
+  resolveGrantOwner,
+  shouldUseEnclaveRead,
+} from "../src/lib/vana/enclave";
+import { readThenAcknowledge } from "../src/lib/vana/read-lifecycle";
 
 const SECRET = `0x${"1".repeat(64)}`;
 const ORIGIN = "https://snapshot.example";
+
+function resumableReadInput(requestId: string, store: DeliveryStore) {
+  return {
+    requestId,
+    gatewayUrl: "https://gateway.example",
+    chainId: 14800,
+    builderPrivateKey: `0x${"2".repeat(64)}`,
+    grantId: `0x${"1".repeat(64)}`,
+    scopes: ["spotify.profile"],
+    status: { ownerAddress: `0x${"a".repeat(40)}` },
+    now: () => 1_000,
+    store,
+  };
+}
+
+function jobStatus(jobId: string, state: JobState): JobStatus {
+  return {
+    jobId,
+    state,
+    operation: "raw_read",
+    owner: getAddress(`0x${"a".repeat(40)}`),
+    grantId: `0x${"1".repeat(64)}`,
+    scope: "spotify.profile",
+    pinnedVersion: null,
+    attempt: 1,
+    price: "0",
+    payer: "builder",
+    paymentState: "none",
+    createdAt: new Date(1_000).toISOString(),
+    claimedAt: null,
+    completedAt: state === "completed" ? new Date(2_000).toISOString() : null,
+    failureReason: state === "failed" ? "The source read failed." : null,
+    ...(state === "completed"
+      ? {
+          result: {
+            objectKey: `jobresults/14800/${jobId}`,
+            url: `https://storage.example/${jobId}`,
+            size: 1,
+            hash: `0x${"0".repeat(64)}`,
+            expiresAt: new Date(901_000).toISOString(),
+          },
+        }
+      : {}),
+  };
+}
+
+function jobResult(jobId: string): JobResult {
+  return {
+    v: 1,
+    jobId,
+    scope: "spotify.profile",
+    version: null,
+    contentType: "application/json",
+    body: new TextEncoder().encode(
+      JSON.stringify({ profile: { display_name: "Ada" } }),
+    ),
+  };
+}
 
 test("strictly validates and resolves launch runtime", () => {
   assert.deepEqual(resolveLaunchRuntime(new URLSearchParams()), {
@@ -73,6 +175,56 @@ test("strictly validates and resolves launch runtime", () => {
   assert.throws(() => resolveLaunchRuntime(new URLSearchParams("vana_env=staging")), /Invalid vana_env/);
   assert.throws(() => resolveLaunchRuntime(new URLSearchParams("network=testnet")), /Invalid network/);
   assert.throws(() => resolveLaunchRuntime(new URLSearchParams("network=moksha&network=mainnet")), /only be provided once/);
+});
+
+test("uses the validated server network default while query parameters win", () => {
+  const defaultNetwork = resolveVanaDefaultNetwork({
+    VANA_DEFAULT_NETWORK: "moksha",
+  });
+  assert.equal(defaultNetwork, "moksha");
+  assert.deepEqual(resolveLaunchRuntime(new URLSearchParams(), defaultNetwork), {
+    env: "production",
+    network: "moksha",
+  });
+  assert.deepEqual(
+    resolveLaunchRuntime(new URLSearchParams("network=mainnet"), defaultNetwork),
+    { env: "production", network: "mainnet" },
+  );
+  assert.equal(resolveVanaDefaultNetwork({}), "mainnet");
+  assert.throws(
+    () => resolveVanaDefaultNetwork({ VANA_DEFAULT_NETWORK: "testnet" }),
+    /Invalid VANA_DEFAULT_NETWORK/,
+  );
+  assert.throws(
+    () =>
+      resolveVanaDefaultNetwork({
+        VANA_DEFAULT_NETWORK: "mainnet",
+        VANA_GATEWAY_URL: "https://gateway-moksha.example",
+      }),
+    /mainnet.*Moksha Gateway/,
+  );
+});
+
+test("uses the validated server environment default while query parameters win", () => {
+  const defaultEnv = resolveVanaDefaultEnv({ VANA_DEFAULT_ENV: "dev" });
+  assert.equal(defaultEnv, "dev");
+  assert.deepEqual(
+    resolveLaunchRuntime(new URLSearchParams(), "moksha", defaultEnv),
+    { env: "dev", network: "moksha" },
+  );
+  assert.deepEqual(
+    resolveLaunchRuntime(
+      new URLSearchParams("vana_env=production"),
+      "moksha",
+      defaultEnv,
+    ),
+    { env: "production", network: "moksha" },
+  );
+  assert.equal(resolveVanaDefaultEnv({}), "production");
+  assert.throws(
+    () => resolveVanaDefaultEnv({ VANA_DEFAULT_ENV: "staging" }),
+    /Invalid VANA_DEFAULT_ENV/,
+  );
 });
 
 test("forwards only the deployment runtime selectors to request creation", () => {
@@ -148,6 +300,426 @@ test("enables the Desktop fixture only with explicit dev and Moksha guards", () 
 test("SDK service-plane selection resolves the expected approval hosts", () => {
   assert.equal(new URL(getDirectEndpoints("dev").approvalAppBaseUrl).hostname, "app-dev.vana.org");
   assert.equal(new URL(getDirectEndpoints("production").approvalAppBaseUrl).hostname, "app.vana.org");
+});
+
+test("applies only configured Direct endpoint overrides", () => {
+  assert.equal(directEndpointOverrides({}), undefined);
+  assert.deepEqual(
+    directEndpointOverrides({
+      VANA_ACCESS_REQUEST_BASE_URL: " http://localhost:3083 ",
+    }),
+    { accessRequestBaseUrl: "http://localhost:3083" },
+  );
+  assert.deepEqual(
+    directEndpointOverrides({
+      VANA_ACCESS_REQUEST_BASE_URL: "http://localhost:3083",
+      VANA_APPROVAL_APP_BASE_URL: "http://localhost:3083",
+    }),
+    {
+      accessRequestBaseUrl: "http://localhost:3083",
+      approvalAppBaseUrl: "http://localhost:3083",
+    },
+  );
+  assert.deepEqual(
+    applyDirectEndpointOverrides(
+      {
+        accessRequestBaseUrl: "https://access.default",
+        approvalAppBaseUrl: "https://approval.default",
+        escrowGatewayUrl: "https://escrow.default",
+      },
+      {
+        VANA_ACCESS_REQUEST_BASE_URL: "https://access.override",
+        VANA_APPROVAL_APP_BASE_URL: "https://approval.override",
+      },
+    ),
+    {
+      accessRequestBaseUrl: "https://access.override",
+      approvalAppBaseUrl: "https://approval.override",
+      escrowGatewayUrl: "https://escrow.default",
+    },
+  );
+});
+
+test("keeps enclave reads opt-in and resolves protocol chain ids", () => {
+  assert.equal(isEnclaveReadMode({}), false);
+  assert.equal(shouldUseEnclaveRead({ delivery: "personal_server" }, {}), false);
+  assert.equal(shouldUseEnclaveRead({ delivery: "enclave" }, {}), true);
+  assert.equal(
+    shouldUseEnclaveRead(
+      { delivery: "personal_server" },
+      { VANA_READ_MODE: "enclave" },
+    ),
+    true,
+  );
+  assert.equal(ENCLAVE_JOB_DEADLINE_SECONDS, 600);
+  assert.equal(ENCLAVE_POLL_TIMEOUT_MS, 20_000);
+  assert.equal(ENCLAVE_READ_WAIT_SECONDS, 25);
+  assert.equal(ENCLAVE_ROUTE_TIMEOUT_MARGIN_MS, 5_000);
+  assert.equal(ENCLAVE_READ_TIMEOUT_MS, 30_000);
+  assert.equal(isEnclaveReadMode({ VANA_READ_MODE: "enclave" }), true);
+  assert.equal(chainIdForNetwork("mainnet"), 1480);
+  assert.equal(chainIdForNetwork("moksha"), 14800);
+});
+
+test("acknowledges every successful read without hiding its result", async () => {
+  const calls: string[] = [];
+  const result = await readThenAcknowledge({
+    read: async () => {
+      calls.push("read");
+      return { ok: true };
+    },
+    acknowledge: async () => {
+      calls.push("acknowledge");
+    },
+    onAcknowledgeError: () => assert.fail("acknowledgement should succeed"),
+  });
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(calls, ["read", "acknowledge"]);
+
+  const warning = new Error("ack unavailable");
+  let observed: unknown;
+  assert.equal(
+    await readThenAcknowledge({
+      read: async () => "data",
+      acknowledge: async () => {
+        throw warning;
+      },
+      onAcknowledgeError: (error) => {
+        observed = error;
+      },
+    }),
+    "data",
+  );
+  assert.equal(observed, warning);
+
+  let acknowledged = false;
+  await assert.rejects(
+    () =>
+      readThenAcknowledge({
+        read: async () => {
+          throw new Error("read failed");
+        },
+        acknowledge: async () => {
+          acknowledged = true;
+        },
+        onAcknowledgeError: () => assert.fail("acknowledgement must not run"),
+      }),
+    /read failed/,
+  );
+  assert.equal(acknowledged, false);
+});
+
+test("maps an enclave scope mismatch to a terminal 403", () => {
+  assert.deepEqual(
+    approvedEnclaveScopes(
+      { scopes: ["spotify.profile"] },
+      ["spotify.profile"],
+    ),
+    ["spotify.profile"],
+  );
+  assert.throws(
+    () =>
+      approvedEnclaveScopes(
+        { scopes: ["spotify.profile"] },
+        ["chatgpt.conversations"],
+      ),
+    (error) => {
+      assert.ok(error instanceof EnclaveReadError);
+      assert.deepEqual(mapClientError(error), {
+        kind: "failed",
+        error: "The approved grant does not cover Lorebook's requested data type.",
+        status: 403,
+      });
+      return true;
+    },
+  );
+});
+
+test("requires a bare Gateway origin", () => {
+  assert.equal(gatewayOrigin("https://gateway.example"), "https://gateway.example");
+  assert.equal(gatewayOrigin("http://localhost:3000"), "http://localhost:3000");
+  assert.equal(gatewayOrigin("http://127.0.0.1:3000"), "http://127.0.0.1:3000");
+  assert.equal(gatewayOrigin("http://[::1]:3000"), "http://[::1]:3000");
+  assert.throws(() => gatewayOrigin(undefined), /VANA_GATEWAY_URL/);
+  assert.throws(
+    () => gatewayOrigin("http://gateway.example"),
+    /bare HTTPS origin or a loopback HTTP origin/,
+  );
+  assert.throws(() => gatewayOrigin("https://gateway.example/v1"), /bare HTTPS origin/);
+});
+
+test("prefers a status owner and otherwise resolves the grantor from the Gateway", async () => {
+  const grantId = `0x${"1".repeat(64)}`;
+  const statusOwner = `0x${"a".repeat(40)}`;
+  let fetched = false;
+  const resolvedStatusOwner = await resolveGrantOwner({
+    gatewayUrl: "https://gateway.example",
+    grantId,
+    status: { userAddress: statusOwner },
+    fetchFn: async () => {
+      fetched = true;
+      return Response.json({});
+    },
+  });
+  assert.equal(resolvedStatusOwner.toLowerCase(), statusOwner);
+  assert.equal(fetched, false);
+
+  const grantor = `0x${"b".repeat(40)}`;
+  const resolvedGrantor = await resolveGrantOwner({
+    gatewayUrl: "https://gateway.example",
+    grantId,
+    fetchFn: async (url) => {
+      assert.equal(url, `https://gateway.example/v1/grants/${grantId}`);
+      return Response.json({ data: { grantorAddress: grantor } });
+    },
+  });
+  assert.equal(resolvedGrantor.toLowerCase(), grantor);
+});
+
+test("reads an enclave scope through the injected jobs client", async () => {
+  const owner = `0x${"a".repeat(40)}`;
+  const grantId = `0x${"1".repeat(64)}`;
+  const builderPrivateKey = `0x${"2".repeat(64)}`;
+  let clientOptions: unknown;
+  let readInput: unknown;
+  const data = await readEnclaveScopes({
+    gatewayUrl: "https://gateway.example",
+    chainId: 14800,
+    builderPrivateKey,
+    grantId,
+    scopes: ["spotify.profile"],
+    status: { ownerAddress: owner },
+    jobsClientFactory: (options) => {
+      clientOptions = options;
+      return {
+        readRaw: async (input) => {
+          readInput = input;
+          return {
+            v: 1,
+            jobId: "job-1",
+            scope: input.scope,
+            version: null,
+            contentType: "application/json",
+            body: new TextEncoder().encode(
+              JSON.stringify({ profile: { display_name: "Ada" } }),
+            ),
+          };
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(clientOptions, {
+    gatewayUrl: "https://gateway.example",
+    chainId: 14800,
+    builderPrivateKey,
+  });
+  assert.deepEqual(readInput, {
+    owner: getAddress(owner),
+    grantId,
+    scope: "spotify.profile",
+    wait: 25,
+    timeoutMs: 30_000,
+  });
+  assert.deepEqual(data, { "spotify.profile": { profile: { display_name: "Ada" } } });
+});
+
+test("returns running then completes the same enclave job across requests", async () => {
+  const store = createMemoryDeliveryStore();
+  const owner = `0x${"a".repeat(40)}`;
+  const grantId = `0x${"1".repeat(64)}`;
+  let submits = 0;
+  let waits = 0;
+  const jobsClientFactory: NonNullable<
+    Parameters<typeof readResumableEnclaveScopes>[0]["jobsClientFactory"]
+  > = () => ({
+    submitRawRead: async () => {
+      submits += 1;
+      return { jobId: "job-resume", state: "queued" };
+    },
+    getJob: async () => jobStatus("job-resume", "completed"),
+    waitForJob: async () => {
+      waits += 1;
+      if (waits === 1) {
+        // The jobs client is loaded from its protocol subpath in production,
+        // so its error constructor can differ from the top-level SDK export.
+        // Match the stable wire/code shape observed in the preview instead.
+        throw Object.assign(new Error("short poll elapsed"), {
+          code: "JOB_TIMEOUT",
+          details: {
+            jobId: "job-resume",
+            timeoutMs: ENCLAVE_POLL_TIMEOUT_MS,
+            state: "claimed",
+          },
+        });
+      }
+      return jobStatus("job-resume", "completed");
+    },
+    openResult: async () => jobResult("job-resume"),
+  });
+  const input = {
+    requestId: "dcr_resume",
+    gatewayUrl: "https://gateway.example",
+    chainId: 14800,
+    builderPrivateKey: `0x${"2".repeat(64)}`,
+    grantId,
+    scopes: ["spotify.profile"],
+    status: { ownerAddress: owner },
+    now: () => 1_000,
+    store,
+    jobsClientFactory,
+  };
+
+  assert.deepEqual(await readResumableEnclaveScopes(input), {
+    state: "running",
+    jobId: "job-resume",
+  });
+  assert.deepEqual(await store.readEnclaveJob("dcr_resume", 1_001), {
+    jobId: "job-resume",
+    scope: "spotify.profile",
+    submittedAt: 1_000,
+    deadlineAt: 601_000,
+    state: "queued",
+    expiresAt: 901_000,
+  });
+  assert.deepEqual(await readResumableEnclaveScopes(input), {
+    state: "completed",
+    data: { "spotify.profile": { profile: { display_name: "Ada" } } },
+  });
+  assert.equal(submits, 1);
+});
+
+test("retry resumes a bound running enclave job without submitting", async () => {
+  const store = createMemoryDeliveryStore();
+  await store.putEnclaveJob("dcr_running", {
+    jobId: "job-running",
+    scope: "spotify.profile",
+    submittedAt: 1_000,
+    deadlineAt: 601_000,
+    state: "running",
+    expiresAt: 901_000,
+  });
+  let submits = 0;
+  const outcome = await readResumableEnclaveScopes({
+    ...resumableReadInput("dcr_running", store),
+    jobsClientFactory: () => ({
+      submitRawRead: async () => {
+        submits += 1;
+        return { jobId: "unexpected", state: "queued" };
+      },
+      getJob: async () => jobStatus("job-running", "running"),
+      waitForJob: async () => jobStatus("job-running", "running"),
+      openResult: async () => jobResult("job-running"),
+    }),
+  });
+  assert.deepEqual(outcome, { state: "running", jobId: "job-running" });
+  assert.equal(submits, 0);
+});
+
+test("retry after a failed enclave job submits one replacement", async () => {
+  const store = createMemoryDeliveryStore();
+  await store.putEnclaveJob("dcr_failed", {
+    jobId: "job-failed",
+    scope: "spotify.profile",
+    submittedAt: 1_000,
+    deadlineAt: 601_000,
+    state: "failed",
+    expiresAt: 901_000,
+  });
+  let submits = 0;
+  const outcome = await readResumableEnclaveScopes({
+    ...resumableReadInput("dcr_failed", store),
+    jobsClientFactory: () => ({
+      submitRawRead: async () => {
+        submits += 1;
+        return { jobId: "job-retry", state: "queued" };
+      },
+      getJob: async () => jobStatus("job-retry", "queued"),
+      waitForJob: async () => {
+        throw new JobTimeoutError("short poll elapsed", {
+          jobId: "job-retry",
+          timeoutMs: ENCLAVE_POLL_TIMEOUT_MS,
+          state: "queued",
+        });
+      },
+      openResult: async () => jobResult("job-retry"),
+    }),
+  });
+  assert.deepEqual(outcome, { state: "running", jobId: "job-retry" });
+  assert.equal(submits, 1);
+});
+
+test("an expired enclave job renders the terminal failure copy", async () => {
+  const store = createMemoryDeliveryStore();
+  await store.putEnclaveJob("dcr_expired", {
+    jobId: "job-expired",
+    scope: "spotify.profile",
+    submittedAt: 1_000,
+    deadlineAt: 601_000,
+    state: "running",
+    expiresAt: 901_000,
+  });
+  await assert.rejects(
+    () =>
+      readResumableEnclaveScopes({
+        ...resumableReadInput("dcr_expired", store),
+        now: () => 601_000,
+        jobsClientFactory: () => ({
+          submitRawRead: async () => assert.fail("expired jobs fail before replacement"),
+          getJob: async () => assert.fail("expired jobs do not poll"),
+          waitForJob: async () => assert.fail("expired jobs do not poll"),
+          openResult: async () => assert.fail("expired jobs have no result"),
+        }),
+      }),
+    (error) => {
+      const mapped = mapClientError(error);
+      assert.equal(mapped.kind, "failed");
+      assert.equal(
+        readFailureCopy(mapped.kind === "failed" ? mapped.kind : undefined),
+        "That read failed, so no new page was added.",
+      );
+      return true;
+    },
+  );
+});
+
+test("client keeps the reading promise open while the enclave job runs", async () => {
+  assert.ok(
+    ENCLAVE_CLIENT_TIMEOUT_MS >= ENCLAVE_JOB_DEADLINE_SECONDS * 1_000,
+  );
+  const responses: unknown[] = [
+    { state: "running", jobId: "job-client" },
+    { scope: "spotify.profile", data: { kind: "quick" } },
+  ];
+  const sleeps: number[] = [];
+  const result = await pollLorebookResult(
+    async () => responses.shift(),
+    { sleep: async (milliseconds) => void sleeps.push(milliseconds) },
+  );
+  assert.deepEqual(result, {
+    scope: "spotify.profile",
+    data: { kind: "quick" },
+  });
+  assert.deepEqual(sleeps, [ENCLAVE_CLIENT_POLL_INTERVAL_MS]);
+});
+
+test("decodes the jobs result body as the direct-read JSON shape", () => {
+  const payload = { profile: { display_name: "Ada" } };
+  assert.deepEqual(
+    decodeEnclaveResult({
+      contentType: "application/json; charset=utf-8",
+      body: new TextEncoder().encode(JSON.stringify(payload)),
+    }),
+    payload,
+  );
+  assert.throws(
+    () =>
+      decodeEnclaveResult({
+        contentType: "text/plain",
+        body: new TextEncoder().encode("{}"),
+      }),
+    /unsupported content type/,
+  );
 });
 
 test("derives a fixed return URL from APP_URL origin", () => {
@@ -369,6 +941,20 @@ test("carries a delivery capability between separate server instances", async ()
     scope: binding.scopes[0],
     data: DELIVERED_SNAPSHOT,
   });
+
+  const enclaveJob = {
+    jobId: "job-shared",
+    scope: binding.scopes[0]!,
+    submittedAt: Date.now(),
+    deadlineAt: Date.now() + 10 * 60 * 1_000,
+    state: "running" as const,
+    expiresAt: Date.now() + 15 * 60 * 1_000,
+  };
+  await delivering.putEnclaveJob(binding.requestId, enclaveJob);
+  assert.deepEqual(
+    await minting.readEnclaveJob(binding.requestId, Date.now()),
+    enclaveJob,
+  );
 });
 
 test("surfaces an unreachable delivery store instead of a silent refusal", async () => {
@@ -427,6 +1013,16 @@ test("blocks reads until the grant covering all scopes is ready", () => {
     personalServerUrl: "https://ps.example",
   };
   assert.doesNotThrow(() => assertGrantReadReady(ready));
+  assert.doesNotThrow(() =>
+    assertGrantReadReady(
+      {
+        status: "approved",
+        grantId: "0xgrant",
+        scopes: ["spotify.profile"],
+      },
+      { requirePersonalServerUrl: false },
+    ),
+  );
   assert.doesNotThrow(() =>
     assertGrantReadReady({ ...ready, status: "approved", scope: "spotify.profile" }),
   );
@@ -521,6 +1117,48 @@ test("maps SDK and unknown failures to sanitized client errors", () => {
     kind: "unavailable",
     error: "The Personal Server is temporarily unavailable.",
     status: 503,
+  });
+  assert.deepEqual(mapClientError(new OwnerNotReadyError("private readiness detail")), {
+    kind: "not_ready",
+    error: "The data owner does not have a ready Personal Server enclave.",
+    status: 409,
+  });
+  assert.deepEqual(mapClientError(new JobNotFoundError("private identity detail")), {
+    kind: "unavailable",
+    error: "The enclave read job could not be found.",
+    status: 502,
+  });
+  assert.deepEqual(
+    mapClientError(
+      new JobRejectedError("private job detail", undefined, null, {
+        state: "failed",
+        failureReason: "The source stopped before it could return data.",
+      }),
+    ),
+    {
+      kind: "failed",
+      error: "The enclave could not complete this read.",
+      detail: "The source stopped before it could return data.",
+      status: 502,
+    },
+  );
+  assert.deepEqual(mapClientError(new GrantInvalidError("private grant detail")), {
+    kind: "failed",
+    error: "The approved grant does not permit this enclave read.",
+    status: 403,
+  });
+  assert.deepEqual(
+    mapClientError(new EnclaveReadError("The approved grant does not cover this scope.", 403)),
+    {
+      kind: "failed",
+      error: "The approved grant does not cover this scope.",
+      status: 403,
+    },
+  );
+  assert.deepEqual(mapClientError(new JobTimeoutError("private timeout detail")), {
+    kind: "unavailable",
+    error: "The enclave read timed out. Retry in a moment.",
+    status: 504,
   });
   assert.deepEqual(mapClientError(new Error("private internal detail")), {
     kind: "failed",

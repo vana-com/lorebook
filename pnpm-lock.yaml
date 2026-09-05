@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@opendatalabs/vana-sdk':
-        specifier: 3.15.0
-        version: 3.15.0(react@19.2.4)(typescript@5.9.3)
+        specifier: 3.23.0-pr.211.fa01520
+        version: 3.23.0-pr.211.fa01520(react@19.2.4)(typescript@5.9.3)
       next:
         specifier: 16.2.10
         version: 16.2.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -410,8 +410,8 @@ packages:
   '@noble/secp256k1@2.3.0':
     resolution: {integrity: sha512-0TQed2gcBbIrh7Ccyw+y/uZQvbJwm7Ao4scBUxqpBCcsOlZG0O4KGfjtNAy/li4W8n1xt3dxrwJ0beZ2h2G6Kw==}
 
-  '@opendatalabs/vana-sdk@3.15.0':
-    resolution: {integrity: sha512-zGYEMihwjWS4bngPHp4lKWR+HFM23AdE/jxg6laCDUFYXgr0cYUW9/OC3bqrSZ05YeX3cxBGUBa4wdwsu6qgdQ==}
+  '@opendatalabs/vana-sdk@3.23.0-pr.211.fa01520':
+    resolution: {integrity: sha512-6StJOy5sSzBtDAWzo6vJaCeKYAysQDpef9pySCZVVFNGcpoGgP6zHN2ZOqDPfl/Dikv6sEjliNsby9KwrMDzFg==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       react: '>=18.0.0'
@@ -885,7 +885,7 @@ snapshots:
 
   '@noble/secp256k1@2.3.0': {}
 
-  '@opendatalabs/vana-sdk@3.15.0(react@19.2.4)(typescript@5.9.3)':
+  '@opendatalabs/vana-sdk@3.23.0-pr.211.fa01520(react@19.2.4)(typescript@5.9.3)':
     dependencies:
       '@noble/hashes': 1.8.0
       '@noble/secp256k1': 2.3.0

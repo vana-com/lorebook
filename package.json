@@ -11,11 +11,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "enclave:read": "tsx scripts/enclave-read.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
-    "@opendatalabs/vana-sdk": "3.15.0",
+    "@opendatalabs/vana-sdk": "3.23.0-pr.211.fa01520",
     "next": "16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4",
