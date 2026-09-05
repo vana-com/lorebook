@@ -1,7 +1,4 @@
-import {
-  JobRejectedError,
-  JobTimeoutError,
-} from "@opendatalabs/vana-sdk";
+import { JobRejectedError } from "@opendatalabs/vana-sdk";
 import { createJobsClient } from "@opendatalabs/vana-sdk/protocol/jobs-client";
 import type {
   JobResult,
@@ -251,7 +248,13 @@ export async function readResumableEnclaveScopes(input: {
         pollMs: ENCLAVE_POLL_INTERVAL_MS,
       });
     } catch (error) {
-      if (error instanceof JobTimeoutError) {
+      if (isJobTimeout(error)) {
+        const timeoutState = jobStateFromError(error);
+        if (timeoutState && TERMINAL_FAILURE_STATES.has(timeoutState)) {
+          stored = { ...stored, state: timeoutState };
+          await store.putEnclaveJob(input.requestId, stored);
+          throw terminalJobError(stored.jobId, timeoutState);
+        }
         return { state: "running", jobId: stored.jobId };
       }
       throw error;
@@ -260,6 +263,9 @@ export async function readResumableEnclaveScopes(input: {
 
   stored = { ...stored, state: job.state };
   await store.putEnclaveJob(input.requestId, stored);
+  if (!isTerminalJob(job)) {
+    return { state: "running", jobId: stored.jobId };
+  }
   if (job.state !== "completed") {
     throw terminalJobError(job.jobId, job.state, job.failureReason);
   }
@@ -324,6 +330,28 @@ export async function readEnclaveScopes(input: {
 
 function isTerminalJob(job: JobStatus): boolean {
   return job.state === "completed" || TERMINAL_FAILURE_STATES.has(job.state);
+}
+
+function isJobTimeout(error: unknown): boolean {
+  return isRecord(error) && error.code === "JOB_TIMEOUT";
+}
+
+function jobStateFromError(error: unknown): JobState | null {
+  if (!isRecord(error) || !isRecord(error.details)) return null;
+  const state = error.details.state;
+  return typeof state === "string" && isJobState(state) ? state : null;
+}
+
+function isJobState(value: string): value is JobState {
+  return (
+    value === "queued" ||
+    value === "claimed" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "expired" ||
+    value === "cancelled"
+  );
 }
 
 function terminalJobError(

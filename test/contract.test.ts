@@ -541,10 +541,16 @@ test("returns running then completes the same enclave job across requests", asyn
     waitForJob: async () => {
       waits += 1;
       if (waits === 1) {
-        throw new JobTimeoutError("short poll elapsed", {
-          jobId: "job-resume",
-          timeoutMs: ENCLAVE_POLL_TIMEOUT_MS,
-          state: "running",
+        // The jobs client is loaded from its protocol subpath in production,
+        // so its error constructor can differ from the top-level SDK export.
+        // Match the stable wire/code shape observed in the preview instead.
+        throw Object.assign(new Error("short poll elapsed"), {
+          code: "JOB_TIMEOUT",
+          details: {
+            jobId: "job-resume",
+            timeoutMs: ENCLAVE_POLL_TIMEOUT_MS,
+            state: "claimed",
+          },
         });
       }
       return jobStatus("job-resume", "completed");
@@ -602,13 +608,7 @@ test("retry resumes a bound running enclave job without submitting", async () =>
         return { jobId: "unexpected", state: "queued" };
       },
       getJob: async () => jobStatus("job-running", "running"),
-      waitForJob: async () => {
-        throw new JobTimeoutError("short poll elapsed", {
-          jobId: "job-running",
-          timeoutMs: ENCLAVE_POLL_TIMEOUT_MS,
-          state: "running",
-        });
-      },
+      waitForJob: async () => jobStatus("job-running", "running"),
       openResult: async () => jobResult("job-running"),
     }),
   });
