@@ -3,6 +3,8 @@ import {
   type AccessRequestStatus,
 } from "@opendatalabs/vana-sdk/server";
 
+import { shouldUseEnclaveRead } from "./enclave";
+
 /**
  * A DCR requesting multiple scopes mints ONE grant covering all of them, so
  * readiness is a grant-level check, not a single-scope match. Direct reads
@@ -17,7 +19,8 @@ export function assertGrantReadReady(
   if (
     (status.status !== "approved" && status.status !== "ready_for_read") ||
     !status.grantId ||
-    (options.requirePersonalServerUrl !== false && !status.personalServerUrl)
+    ((options.requirePersonalServerUrl ?? !shouldUseEnclaveRead(status)) &&
+      !status.personalServerUrl)
   ) {
     throw new AccessNotApprovedError("The approved grant is not ready to read.");
   }

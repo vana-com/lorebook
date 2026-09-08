@@ -1208,3 +1208,19 @@ test("marks JSON responses as non-cacheable", async () => {
   assert.equal(response.headers.get("Cache-Control"), "no-store");
   assert.deepEqual(await response.json(), { error: "Sanitized failure" });
 });
+
+test("accepts the URL-less enclave grant used by the consent return page", () => {
+  assert.doesNotThrow(() => assertGrantReadReady({
+    status: "ready_for_read",
+    grantId: `0x${"a".repeat(64)}`,
+    delivery: "enclave",
+    scopes: ["spotify.profile"],
+  }));
+});
+
+test("still rejects unapproved or missing enclave grants and explicit URL requirements", () => {
+  const enclave = { status: "ready_for_read" as const, delivery: "enclave" as const, grantId: "0xgrant" };
+  assert.throws(() => assertGrantReadReady({ ...enclave, status: "pending" }), AccessNotApprovedError);
+  assert.throws(() => assertGrantReadReady({ ...enclave, grantId: undefined }), AccessNotApprovedError);
+  assert.throws(() => assertGrantReadReady(enclave, { requirePersonalServerUrl: true }), AccessNotApprovedError);
+});
