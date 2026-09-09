@@ -15,9 +15,21 @@ import {
   type LorebookSnapshot,
 } from "@/lib/combined-snapshot";
 import { resolveAppUrl } from "./app-url";
+import type { RequestBinding } from "./binding";
 import { assertGrantReadReady } from "./capability";
 import { LOREBOOK_QUICK_APP, type VanaAppDefinition } from "./constants";
-import type { VanaRuntime } from "./runtime";
+import {
+  applyDirectEndpointOverrides,
+  directEndpointOverrides,
+} from "./endpoints";
+import {
+  approvedEnclaveScopes,
+  isEnclaveReadMode,
+  readResumableEnclaveScopes,
+  shouldUseEnclaveRead,
+} from "./enclave";
+import { readThenAcknowledge } from "./read-lifecycle";
+import { chainIdForNetwork, type VanaRuntime } from "./runtime";
 
 type Controller = ReturnType<typeof createDirectDataController>;
 
@@ -49,7 +61,8 @@ export function getVanaController(
   app: VanaAppDefinition = LOREBOOK_QUICK_APP,
   config = getVanaServerConfig(),
 ): Controller {
-  const key = `${app.id}:${runtime.env}:${runtime.network}`;
+  const endpoints = directEndpointOverrides();
+  const key = `${app.id}:${runtime.env}:${runtime.network}:${endpoints?.accessRequestBaseUrl ?? ""}:${endpoints?.approvalAppBaseUrl ?? ""}`;
   const cached = controllers.get(key);
   if (cached) return cached;
 
@@ -69,6 +82,7 @@ export function getVanaController(
     // Request every scope at once so the approval mints ONE grant covering all
     // of them (avoids the BUI-732 scope-overwrite from separate DCRs).
     scopes: [...app.scopes],
+    ...(endpoints ? { endpoints } : {}),
   });
   controllers.set(key, controller);
   return controller;
@@ -80,54 +94,77 @@ export async function readApprovedScopes(
   runtime: VanaRuntime,
   app: VanaAppDefinition,
   config: VanaServerConfig,
-  requestId: string,
-): Promise<{ scope: string; data: LorebookSnapshot }> {
-  const status = await controller.getAccessRequestStatus(requestId);
-  assertGrantReadReady(status);
-  // assertGrantReadReady guarantees both are present.
-  const personalServerUrl = status.personalServerUrl as string;
+  binding: RequestBinding,
+): Promise<
+  | { state: "running"; jobId: string }
+  | { scope: string; data: LorebookSnapshot }
+> {
+  const status = await controller.getAccessRequestStatus(binding.requestId);
+  const enclaveMode = shouldUseEnclaveRead(status);
+  assertGrantReadReady(status, { requirePersonalServerUrl: !enclaveMode });
+  // Readiness guarantees the fields required by the selected transport.
   const grantId = status.grantId as string;
 
-  const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
   const chainId = chainIdForNetwork(runtime.network);
-  const endpoints = getDirectEndpoints(runtime.env);
-  const escrow: EscrowPaymentConfig = {
-    client: createEscrowGatewayClient(endpoints.escrowGatewayUrl),
-    escrowContract: CONTRACTS.DataPortabilityEscrow.addresses[chainId],
-    chainId,
-    signTypedData: account.signTypedData,
-  };
-  const signMessage = (message: string) => account.signMessage({ message });
-
   if (app.scopes.length !== 1 || !app.scopes[0]) {
     throw new PersonalServerReadError("Lorebook requires exactly one approved data type.", 400);
   }
   const scope = app.scopes[0];
-  const result = await readPersonalServerData({
-    personalServerUrl,
-    scope,
-    grantId,
-    payerAddress: account.address,
-    signMessage,
-    escrow,
-  });
-  const snapshot = mapLorebookSnapshot(app, scope, result.data);
+  const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
+  const endpoints = applyDirectEndpointOverrides(getDirectEndpoints(runtime.env));
+  const signMessage = (message: string) => account.signMessage({ message });
+  const acknowledge = () => acknowledgeRead(binding.requestId, account, endpoints);
+  const onAcknowledgeError = (error: unknown) =>
+    console.warn(
+      `[vana/read] acknowledgeRead failed for ${binding.requestId}`,
+      error,
+    );
 
-  // Acknowledge once so Vana Web completes the DCR and closes the approval tab.
-  // Best-effort: an ack failure must not fail an otherwise-successful read.
-  try {
-    const accessRequestClient = createDefaultAccessRequestClient({
-      baseUrl: endpoints.accessRequestBaseUrl,
-      approvalBaseUrl: endpoints.approvalAppBaseUrl,
-      appAddress: account.address,
-      signMessage,
+  if (enclaveMode) {
+    const outcome = await readResumableEnclaveScopes({
+      requestId: binding.requestId,
+      gatewayUrl: process.env.VANA_GATEWAY_URL ?? "",
+      chainId,
+      builderPrivateKey: config.appPrivateKey,
+      grantId,
+      scopes: approvedEnclaveScopes(status, app.scopes),
+      status,
     });
-    await accessRequestClient.acknowledgeRead?.(requestId);
-  } catch (error) {
-    console.warn(`[vana/read] acknowledgeRead failed for ${requestId}`, error);
+    if (outcome.state === "running") return outcome;
+    return readThenAcknowledge({
+      read: async () => ({
+        scope: status.scope ?? scope,
+        data: mapLorebookSnapshot(app, scope, outcome.data[scope]),
+      }),
+      acknowledge,
+      onAcknowledgeError,
+    });
   }
 
-  return { scope: status.scope ?? scope, data: snapshot };
+  return readThenAcknowledge({
+    read: async () => {
+      const escrow: EscrowPaymentConfig = {
+        client: createEscrowGatewayClient(endpoints.escrowGatewayUrl),
+        escrowContract: CONTRACTS.DataPortabilityEscrow.addresses[chainId],
+        chainId,
+        signTypedData: account.signTypedData,
+      };
+      const result = await readPersonalServerData({
+        personalServerUrl: status.personalServerUrl as string,
+        scope,
+        grantId,
+        payerAddress: account.address,
+        signMessage,
+        escrow,
+      });
+      return {
+        scope: status.scope ?? scope,
+        data: mapLorebookSnapshot(app, scope, result.data),
+      };
+    },
+    acknowledge,
+    onAcknowledgeError,
+  });
 }
 
 /** Read using foreground routing supplied by Vana Mobile, then acknowledge. */
@@ -150,30 +187,51 @@ export async function readForegroundDeliveredScopes(
     throw new PersonalServerReadError("Lorebook requires its exact approved data type.", 400);
   }
   const scope = input.scopes[0];
-  const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
   const chainId = chainIdForNetwork(runtime.network);
-  const endpoints = getDirectEndpoints(runtime.env);
-  const escrow: EscrowPaymentConfig = {
-    client: createEscrowGatewayClient(endpoints.escrowGatewayUrl),
-    escrowContract: CONTRACTS.DataPortabilityEscrow.addresses[chainId],
-    chainId,
-    signTypedData: account.signTypedData,
-  };
-  const result = await readPersonalServerData({
-    personalServerUrl: input.personalServerUrl,
-    scope,
-    grantId: input.grantId,
-    payerAddress: account.address,
-    signMessage: (message: string) => account.signMessage({ message }),
-    escrow,
+  const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
+  const endpoints = applyDirectEndpointOverrides(getDirectEndpoints(runtime.env));
+  return readThenAcknowledge({
+    read: async () => {
+      if (isEnclaveReadMode()) {
+        const outcome = await readResumableEnclaveScopes({
+          requestId: input.requestId,
+          gatewayUrl: process.env.VANA_GATEWAY_URL ?? "",
+          chainId,
+          builderPrivateKey: config.appPrivateKey,
+          grantId: input.grantId,
+          scopes: input.scopes,
+        });
+        if (outcome.state === "running") {
+          throw new PersonalServerReadError(
+            "Foreground delivery cannot leave an enclave read running.",
+            502,
+          );
+        }
+        return { scope, data: mapLorebookSnapshot(app, scope, outcome.data[scope]) };
+      }
+      const escrow: EscrowPaymentConfig = {
+        client: createEscrowGatewayClient(endpoints.escrowGatewayUrl),
+        escrowContract: CONTRACTS.DataPortabilityEscrow.addresses[chainId],
+        chainId,
+        signTypedData: account.signTypedData,
+      };
+      const result = await readPersonalServerData({
+        personalServerUrl: input.personalServerUrl,
+        scope,
+        grantId: input.grantId,
+        payerAddress: account.address,
+        signMessage: (message: string) => account.signMessage({ message }),
+        escrow,
+      });
+      return { scope, data: mapLorebookSnapshot(app, scope, result.data) };
+    },
+    acknowledge: () => acknowledgeRead(input.requestId, account, endpoints),
+    onAcknowledgeError: (error) =>
+      console.warn(
+        `[vana/delivery] acknowledgeRead failed for ${input.requestId}`,
+        error,
+      ),
   });
-  const data = mapLorebookSnapshot(app, scope, result.data);
-  try {
-    await acknowledgeRead(input.requestId, account, endpoints);
-  } catch (error) {
-    console.warn(`[vana/delivery] acknowledgeRead failed for ${input.requestId}`, error);
-  }
-  return { scope, data };
 }
 
 async function acknowledgeRead(
@@ -188,10 +246,4 @@ async function acknowledgeRead(
     signMessage: (message: string) => account.signMessage({ message }),
   });
   await accessRequestClient.acknowledgeRead?.(requestId);
-}
-
-// Protocol chain id per network: Vana mainnet 1480, Moksha testnet 14800 —
-// the keys present in CONTRACTS.*.addresses.
-function chainIdForNetwork(network: VanaRuntime["network"]): 1480 | 14800 {
-  return network === "mainnet" ? 1480 : 14800;
 }

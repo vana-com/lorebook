@@ -18,7 +18,23 @@ import {
   type VanaRuntime,
 } from "@/lib/vana/runtime";
 
-type ErrorBody = { error?: unknown };
+type ErrorBody = { kind?: unknown; error?: unknown; detail?: unknown };
+type LorebookErrorKind = "empty" | "failed" | "unavailable";
+type RunningRead = { state: "running"; jobId: string };
+
+export const ENCLAVE_CLIENT_POLL_INTERVAL_MS = 2_500;
+export const ENCLAVE_CLIENT_TIMEOUT_MS = 630_000;
+
+class LorebookRequestError extends Error {
+  constructor(
+    message: string,
+    readonly kind?: LorebookErrorKind,
+    readonly detail?: string,
+  ) {
+    super(message);
+    this.name = "LorebookRequestError";
+  }
+}
 
 const CHAPTERS: Record<
   LorebookMode,
@@ -53,25 +69,111 @@ const SPINNER_STATES = ["creating", "awaiting_approval", "reading"];
 // returned, so we infer it locally: they tapped the link ("opened"), then this
 // tab became visible again ("returned").
 type Handoff = "none" | "opened" | "returned";
+type RetryNotice = "fresh_approval_required" | null;
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null);
-    const candidate = isRecord(body) ? (body as ErrorBody).error : undefined;
-    throw new Error(typeof candidate === "string" ? candidate : "Lorebook could not finish that read.");
+    const errorBody = isRecord(body) ? (body as ErrorBody) : {};
+    const candidate = errorBody.error;
+    const kind =
+      errorBody.kind === "failed" || errorBody.kind === "unavailable"
+        ? errorBody.kind
+        : undefined;
+    throw new LorebookRequestError(
+      typeof candidate === "string" ? candidate : "Lorebook could not finish that read.",
+      kind,
+      typeof errorBody.detail === "string" ? errorBody.detail : undefined,
+    );
   }
   return (await response.json()) as T;
 }
 
-export function LorebookApp() {
+export async function pollLorebookResult<T>(
+  read: () => Promise<unknown>,
+  options: {
+    now?: () => number;
+    sleep?: (milliseconds: number) => Promise<void>;
+    timeoutMs?: number;
+  } = {},
+): Promise<ApprovedDataResult<T>> {
+  const now = options.now ?? Date.now;
+  const sleep =
+    options.sleep ??
+    ((milliseconds: number) =>
+      new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds)));
+  const timeoutMs = options.timeoutMs ?? ENCLAVE_CLIENT_TIMEOUT_MS;
+  const startedAt = now();
+
+  for (;;) {
+    const result = await read();
+    if (!isRunningRead(result)) {
+      if (
+        !isRecord(result) ||
+        typeof result.scope !== "string" ||
+        !isRecord(result.data)
+      ) {
+        throw new LorebookRequestError("The read returned no data.", "empty");
+      }
+      return result as unknown as ApprovedDataResult<T>;
+    }
+    const remaining = timeoutMs - (now() - startedAt);
+    if (remaining <= 0) {
+      throw new LorebookRequestError(
+        "The enclave read timed out. Retry in a moment.",
+        "unavailable",
+      );
+    }
+    await sleep(Math.min(ENCLAVE_CLIENT_POLL_INTERVAL_MS, remaining));
+  }
+}
+
+async function readLorebookResult(path: string): Promise<ApprovedDataResult<LorebookSnapshot>> {
+  return pollLorebookResult(() => jsonFetch<unknown>(path));
+}
+
+function isRunningRead(value: unknown): value is RunningRead {
+  return (
+    isRecord(value) &&
+    value.state === "running" &&
+    typeof value.jobId === "string" &&
+    value.jobId.length > 0
+  );
+}
+
+export function readFailureCopy(
+  kind: LorebookErrorKind | undefined,
+  hasDetail = false,
+): string {
+  if (kind === "empty") {
+    return "That read finished without anything to show. No new page was added.";
+  }
+  if (kind === "failed") {
+    return hasDetail
+      ? "That read failed, so no new page was added. You can find what happened in Connection details."
+      : "That read failed, so no new page was added.";
+  }
+  if (kind === "unavailable") {
+    return "We couldn’t reach your data just now. No new page was added.";
+  }
+  return "We couldn’t finish that page. No new data was added.";
+}
+
+export function LorebookApp({
+  defaultEnv,
+  defaultNetwork,
+}: {
+  defaultEnv: VanaRuntime["env"];
+  defaultNetwork: VanaRuntime["network"];
+}) {
   const [mode, setMode] = useState<LorebookJourney>("quick");
   const connect = useDirectVanaConnect<LorebookSnapshot>({
     createRequest: () => jsonFetch<AccessRequest>(buildRequestPath(mode, window.location.search), { method: "POST" }),
     getStatus: (requestId) =>
       jsonFetch<AccessRequestStatus>(`/api/vana/status?requestId=${encodeURIComponent(requestId)}`),
     readResult: (requestId) =>
-      jsonFetch<ApprovedDataResult<LorebookSnapshot>>(
+      readLorebookResult(
         `/api/vana/read?requestId=${encodeURIComponent(requestId)}`,
       ),
   });
@@ -93,7 +195,7 @@ export function LorebookApp() {
 
   return (
     <main className="lorebook-shell">
-      <NetworkSwitch />
+      <NetworkSwitch defaultEnv={defaultEnv} defaultNetwork={defaultNetwork} />
 
       <header className="site-header">
         <span className="brand">
@@ -156,7 +258,12 @@ export function LorebookApp() {
           <div className="portrait-card">
             {data ? <LoreResult data={data} /> : <EmptyPortrait mode={mode} />}
           </div>
-          <ConnectAction connect={connect} mode={mode} />
+          <ConnectAction
+            connect={connect}
+            mode={mode}
+            defaultEnv={defaultEnv}
+            defaultNetwork={defaultNetwork}
+          />
         </div>
       </section>
 
@@ -169,24 +276,36 @@ export function LorebookApp() {
 }
 
 /**
- * Dev affordance. Lorebook defaults to production + mainnet when the URL says
- * nothing, so testers on the bare URL silently drive production. Changing the
- * runtime is a full navigation on purpose: the SDK controller is keyed by
- * env/network, so every in-memory flow state must be dropped with it.
+ * Dev affordance. Lorebook uses the server-configured default when the URL says
+ * nothing. Changing the runtime is a full navigation on purpose: the SDK
+ * controller is keyed by env/network, so every in-memory flow state must be
+ * dropped with it.
  */
-function NetworkSwitch() {
+function NetworkSwitch({
+  defaultEnv,
+  defaultNetwork,
+}: {
+  defaultEnv: VanaRuntime["env"];
+  defaultNetwork: VanaRuntime["network"];
+}) {
   const [runtime, setRuntime] = useState<VanaRuntime | "invalid" | null>(null);
   const [journey, setJourney] = useState<LorebookJourney | undefined>(undefined);
 
   useEffect(() => {
     const search = window.location.search;
     try {
-      setRuntime(resolveLaunchRuntime(new URLSearchParams(search)));
+      setRuntime(
+        resolveLaunchRuntime(
+          new URLSearchParams(search),
+          defaultNetwork,
+          defaultEnv,
+        ),
+      );
     } catch {
       setRuntime("invalid");
     }
     if (isDesktopFixtureSearch(search)) setJourney("desktop-saved-tracks");
-  }, []);
+  }, [defaultEnv, defaultNetwork]);
 
   const selected = runtime && runtime !== "invalid" ? runtimeOptionId(runtime) : null;
   const tone = runtime === null ? "pending" : selected ?? "custom";
@@ -295,7 +414,17 @@ function Metric({ value, label }: { value: number | null; label: string }) {
   return <div className="metric"><strong>{value == null ? "—" : value.toLocaleString()}</strong><span>{label}</span></div>;
 }
 
-function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>; mode: LorebookJourney }) {
+function ConnectAction({
+  connect,
+  mode,
+  defaultEnv,
+  defaultNetwork,
+}: {
+  connect: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>;
+  mode: LorebookJourney;
+  defaultEnv: VanaRuntime["env"];
+  defaultNetwork: VanaRuntime["network"];
+}) {
   const state = connect.state;
   // Mobile-deep: after asynchronous DCR creation the SDK exposes the single
   // continuation URL. The original click's iOS user activation cannot be
@@ -309,11 +438,22 @@ function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirect
   const approvalRecoveryUrl =
     state.type === "awaiting_approval" && state.popupBlocked ? state.request.approvalUrl : null;
   const [handoff, setHandoff] = useState<Handoff>("none");
+  const [retryNotice, setRetryNotice] = useState<RetryNotice>(null);
+  const [retryPending, setRetryPending] = useState(false);
   const returningFromVana = handoff === "returned" && mobileContinuationUrl !== null;
+  const errorDetail = state.type === "error" && state.error instanceof LorebookRequestError
+    ? state.error.detail
+    : undefined;
 
   // Any move off `ready_to_open` (poll landed, reset, restart) ends the handoff.
   useEffect(() => {
     if (state.type !== "ready_to_open") setHandoff("none");
+  }, [state.type]);
+
+  useEffect(() => {
+    if (state.type === "idle" || state.type === "done" || state.type === "error") {
+      setRetryNotice(null);
+    }
   }, [state.type]);
 
   useEffect(() => {
@@ -331,13 +471,28 @@ function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirect
     };
   }, [handoff]);
 
+  async function retryRead() {
+    setRetryPending(true);
+    setRetryNotice(null);
+    try {
+      const outcome = await connect.retryRead();
+      if (outcome === "fresh_approval_required") {
+        setRetryNotice(outcome);
+      }
+    } catch (error) {
+      console.error("[lorebook] Read retry failed", error);
+    } finally {
+      setRetryPending(false);
+    }
+  }
+
   if (state.type === "done") {
     return <button className="secondary-button reset-button" type="button" onClick={() => connect.reset()}>Write another page</button>;
   }
 
   return (
     <div className="connect-action" aria-live="polite">
-      <p>{statusCopy(state.type, Boolean(mobileContinuationUrl), Boolean(approvalRecoveryUrl), mode, returningFromVana)}</p>
+      <p>{statusCopy(state, Boolean(mobileContinuationUrl), Boolean(approvalRecoveryUrl), mode, returningFromVana, retryNotice)}</p>
       {mobileContinuationUrl ? (
         returningFromVana ? (
           <>
@@ -353,16 +508,18 @@ function ConnectAction({ connect, mode }: { connect: ReturnType<typeof useDirect
       ) : null}
       {state.type === "idle" ? <button className="primary-button" type="button" onClick={() => void connect.start()}>{mode === "quick" ? "Read my public rhythm" : mode === "desktop-saved-tracks" ? "Import my liked songs" : "Map my curiosities"}<ArrowIcon /></button> : null}
       {SPINNER_STATES.includes(state.type) ? <button className="primary-button loading" type="button" disabled><span className="spinner" />{state.type === "reading" ? "Writing your page…" : "Waiting for Vana…"}</button> : null}
-      {state.type === "error" ? <button className="primary-button" type="button" onClick={() => { connect.reset(); void connect.start(); }}>Try that again<ArrowIcon /></button> : null}
+      {state.type === "error" ? <button className={`primary-button${retryPending ? " loading" : ""}`} type="button" disabled={retryPending} onClick={() => void retryRead()}>{retryPending ? <><span className="spinner" />Trying that read again…</> : <>Try that again<ArrowIcon /></>}</button> : null}
       <details className="connection-details">
         <summary>Connection details</summary>
-        <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div><RuntimeDetails /></dl>
+        <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div>{errorDetail ? <div><dt>Reason</dt><dd>{errorDetail}</dd></div> : null}<RuntimeDetails defaultEnv={defaultEnv} defaultNetwork={defaultNetwork} /></dl>
       </details>
     </div>
   );
 }
 
-function statusCopy(type: string, hasMobileContinuation: boolean, hasApprovalRecovery: boolean, mode: LorebookJourney, returningFromVana = false): string {
+function statusCopy(state: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>>["state"], hasMobileContinuation: boolean, hasApprovalRecovery: boolean, mode: LorebookJourney, returningFromVana = false, retryNotice: RetryNotice = null): string {
+  const type = state.type;
+  if (retryNotice === "fresh_approval_required") return "Your earlier approval can’t be reused. Review this request in Vana and approve it again.";
   if (returningFromVana) return "Welcome back—we’re picking up what you approved in Vana. This takes a few seconds.";
   if (hasMobileContinuation) return "Open Vana to review this request, then come back to this tab.";
   if (hasApprovalRecovery) return "Vana approval is ready. Open it to continue.";
@@ -370,22 +527,39 @@ function statusCopy(type: string, hasMobileContinuation: boolean, hasApprovalRec
   if (type === "creating") return "Opening a private data request…";
   if (type === "awaiting_approval") return "Approve the request in Vana, then come back here.";
   if (type === "reading") return "Reading only what you approved…";
-  if (type === "error") return "That page stayed blank. No new data was added to Lorebook.";
+  if (type === "error") {
+    if (state.error instanceof LorebookRequestError) {
+      return readFailureCopy(state.error.kind, Boolean(state.error.detail));
+    }
+    return readFailureCopy(undefined);
+  }
   return "";
 }
 
-function RuntimeDetails() {
+function RuntimeDetails({
+  defaultEnv,
+  defaultNetwork,
+}: {
+  defaultEnv: VanaRuntime["env"];
+  defaultNetwork: VanaRuntime["network"];
+}) {
   const [runtime, setRuntime] = useState<VanaRuntime | "invalid">({
-    env: "production",
-    network: "mainnet",
+    env: defaultEnv,
+    network: defaultNetwork,
   });
   useEffect(() => {
     try {
-      setRuntime(resolveLaunchRuntime(new URLSearchParams(window.location.search)));
+      setRuntime(
+        resolveLaunchRuntime(
+          new URLSearchParams(window.location.search),
+          defaultNetwork,
+          defaultEnv,
+        ),
+      );
     } catch {
       setRuntime("invalid");
     }
-  }, []);
+  }, [defaultEnv, defaultNetwork]);
   if (runtime === "invalid") return <div><dt>Runtime</dt><dd>invalid</dd></div>;
   return <><div><dt>Environment</dt><dd>{runtime.env}</dd></div><div><dt>Network</dt><dd>{runtime.network}</dd></div></>;
 }

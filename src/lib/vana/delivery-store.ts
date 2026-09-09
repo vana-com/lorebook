@@ -16,6 +16,7 @@
  */
 
 import type { LorebookSnapshot } from "@/lib/combined-snapshot";
+import type { JobState } from "@opendatalabs/vana-sdk";
 import type { RequestBinding } from "./binding";
 
 /** A registered one-time delivery capability, awaiting the phone's callback. */
@@ -36,6 +37,16 @@ export type StoredResult = {
   expiresAt: number;
 };
 
+/** A resumable enclave job associated with one browser-bound request. */
+export type StoredEnclaveJob = {
+  jobId: string;
+  scope: string;
+  submittedAt: number;
+  deadlineAt: number;
+  state: JobState;
+  expiresAt: number;
+};
+
 /**
  * The two-phase consume is deliberate. `readRegistration` leaves the
  * registration intact so a malformed or mismatched callback cannot burn a
@@ -50,6 +61,8 @@ export interface DeliveryStore {
   deleteRegistration(requestId: string): Promise<boolean>;
   putResult(requestId: string, result: StoredResult): Promise<void>;
   readResult(requestId: string, now: number): Promise<StoredResult | null>;
+  putEnclaveJob(requestId: string, job: StoredEnclaveJob): Promise<void>;
+  readEnclaveJob(requestId: string, now: number): Promise<StoredEnclaveJob | null>;
 }
 
 export class DeliveryStoreError extends Error {
@@ -61,11 +74,13 @@ export class DeliveryStoreError extends Error {
 
 const REGISTRATION_LIMIT = 128;
 const RESULT_LIMIT = 128;
+const ENCLAVE_JOB_LIMIT = 128;
 
 /** Process-local store. Correct only when one process serves every request. */
 export function createMemoryDeliveryStore(): DeliveryStore {
   const registrations = new Map<string, StoredRegistration>();
   const results = new Map<string, StoredResult>();
+  const enclaveJobs = new Map<string, StoredEnclaveJob>();
 
   function prune(now: number): void {
     for (const [requestId, registration] of registrations) {
@@ -73,6 +88,9 @@ export function createMemoryDeliveryStore(): DeliveryStore {
     }
     for (const [requestId, result] of results) {
       if (result.expiresAt <= now) results.delete(requestId);
+    }
+    for (const [requestId, job] of enclaveJobs) {
+      if (job.expiresAt <= now) enclaveJobs.delete(requestId);
     }
   }
 
@@ -111,6 +129,17 @@ export function createMemoryDeliveryStore(): DeliveryStore {
     async readResult(requestId, now) {
       prune(now);
       return results.get(requestId) ?? null;
+    },
+
+    async putEnclaveJob(requestId, job) {
+      prune(Date.now());
+      enclaveJobs.set(requestId, job);
+      trimOldest(enclaveJobs, ENCLAVE_JOB_LIMIT);
+    },
+
+    async readEnclaveJob(requestId, now) {
+      prune(now);
+      return enclaveJobs.get(requestId) ?? null;
     },
   };
 }
@@ -204,6 +233,14 @@ export function createRedisDeliveryStore(config: {
 
     async readResult(requestId, now) {
       return readJson<StoredResult>(`${KEY_PREFIX}:result:${requestId}`, now);
+    },
+
+    async putEnclaveJob(requestId, job) {
+      await writeJson(`${KEY_PREFIX}:enclave-job:${requestId}`, job);
+    },
+
+    async readEnclaveJob(requestId, now) {
+      return readJson<StoredEnclaveJob>(`${KEY_PREFIX}:enclave-job:${requestId}`, now);
     },
   };
 }
