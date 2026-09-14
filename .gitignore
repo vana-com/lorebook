@@ -7,3 +7,5 @@ next-env.d.ts
 .gstack/
 .idea/
 .vercel
+HANDOFF-*.md
+REVIEW-*.md

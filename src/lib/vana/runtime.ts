@@ -8,6 +8,16 @@ export type VanaRuntime = {
   network: "moksha" | "mainnet";
 };
 
+export const VANA_NETWORKS = ["mainnet", "moksha"] as const;
+export const VANA_DEFAULT_NETWORK: VanaRuntime["network"] = "mainnet";
+export const VANA_ENVS = ["dev", "production"] as const;
+export const VANA_DEFAULT_ENV: VanaRuntime["env"] = "production";
+export const MOKSHA_GATEWAY_HOST_MARKER = "moksha";
+
+export function chainIdForNetwork(network: VanaRuntime["network"]): 1480 | 14800 {
+  return network === "mainnet" ? 1480 : 14800;
+}
+
 /** The two runtime pairings Lorebook is exercised against, as testers see them. */
 export type RuntimeOptionId = "testnet" | "mainnet";
 
@@ -35,7 +45,11 @@ export class LaunchRuntimeError extends Error {
   }
 }
 
-export function resolveLaunchRuntime(params: URLSearchParams): VanaRuntime {
+export function resolveLaunchRuntime(
+  params: URLSearchParams,
+  defaultNetwork: VanaRuntime["network"] = VANA_DEFAULT_NETWORK,
+  defaultEnv: VanaRuntime["env"] = VANA_DEFAULT_ENV,
+): VanaRuntime {
   const vanaEnvs = params.getAll("vana_env");
   const networks = params.getAll("network");
 
@@ -55,9 +69,47 @@ export function resolveLaunchRuntime(params: URLSearchParams): VanaRuntime {
   }
 
   return {
-    env: vanaEnv ?? "production",
-    network: network ?? "mainnet",
+    env: vanaEnv ?? defaultEnv,
+    network: network ?? defaultNetwork,
   };
+}
+
+export function resolveVanaDefaultEnv(
+  env: Record<string, string | undefined>,
+): VanaRuntime["env"] {
+  const configured = env.VANA_DEFAULT_ENV?.trim().toLowerCase();
+  if (configured && !VANA_ENVS.includes(configured as (typeof VANA_ENVS)[number])) {
+    throw new LaunchRuntimeError(
+      "Invalid VANA_DEFAULT_ENV. Expected dev or production.",
+    );
+  }
+  return (configured || VANA_DEFAULT_ENV) as VanaRuntime["env"];
+}
+
+export function resolveVanaDefaultNetwork(
+  env: Record<string, string | undefined>,
+): VanaRuntime["network"] {
+  const configured = env.VANA_DEFAULT_NETWORK?.trim().toLowerCase();
+  if (
+    configured &&
+    !VANA_NETWORKS.includes(configured as (typeof VANA_NETWORKS)[number])
+  ) {
+    throw new LaunchRuntimeError(
+      "Invalid VANA_DEFAULT_NETWORK. Expected mainnet or moksha.",
+    );
+  }
+  const network = (configured || VANA_DEFAULT_NETWORK) as VanaRuntime["network"];
+  const gatewayUrl = env.VANA_GATEWAY_URL?.trim();
+  if (
+    network === "mainnet" &&
+    gatewayUrl &&
+    gatewayHostname(gatewayUrl).includes(MOKSHA_GATEWAY_HOST_MARKER)
+  ) {
+    throw new LaunchRuntimeError(
+      "VANA_DEFAULT_NETWORK is mainnet but VANA_GATEWAY_URL points to a Moksha Gateway.",
+    );
+  }
+  return network;
 }
 
 /** Resolve a hidden fixture only when every explicit dev guard is present. */
@@ -90,4 +142,12 @@ function normalizeNetwork(value: string | null): VanaRuntime["network"] | null {
   if (value === null) return null;
   const normalized = value.toLowerCase();
   return normalized === "moksha" || normalized === "mainnet" ? normalized : null;
+}
+
+function gatewayHostname(value: string): string {
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
 }

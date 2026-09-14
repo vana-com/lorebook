@@ -5,6 +5,8 @@ import { getDeliveredResult } from "@/lib/vana/foreground-delivery";
 import { readApprovedScopes } from "@/lib/vana/server";
 import { NextRequest } from "next/server";
 
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   const requestId = requestIdFromUrl(request.url);
   if (!requestId) {
@@ -34,14 +36,21 @@ export async function GET(request: NextRequest) {
       bound.binding.runtime,
       bound.app,
       bound.config,
-      requestId,
+      bound.binding,
     );
+    if ("state" in result) {
+      return jsonNoStore(result, { status: 202 });
+    }
     return jsonNoStore({ scope: result.scope, data: result.data });
   } catch (error) {
     const clientError = mapClientError(error);
     console.error(`[vana/read] Read failed for ${requestId}`, error);
     return jsonNoStore(
-      { kind: clientError.kind, error: clientError.error },
+      {
+        kind: clientError.kind,
+        error: clientError.error,
+        ...(clientError.detail ? { detail: clientError.detail } : {}),
+      },
       { status: clientError.status },
     );
   }

@@ -10,6 +10,8 @@ import {
 } from "@/lib/vana/server";
 import { NextRequest } from "next/server";
 
+export const maxDuration = 60;
+
 type DeliveryBody = {
   requestId: string;
   personalServerUrl: string;
