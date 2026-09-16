@@ -196,7 +196,12 @@ VANA_APPROVAL_APP_BASE_URL=http://approval-preview.example
 omits `vana_env` or `network`. They accept `dev`/`production` and `moksha`/`mainnet`, defaulting to
 `production` and `mainnet`; explicit query parameters still win. Startup fails with a clear
 configuration error when the network default is `mainnet` but the Gateway host contains `moksha`.
-`VANA_GATEWAY_URL` must be a bare HTTPS origin (or loopback HTTP origin). To inspect an
+
+The Gateway, access-request and approval URLs follow the *request's* network, so one deployment
+serves both (`?network=moksha&vana_env=dev` on the mainnet build reaches Moksha). The three
+`VANA_*_URL` variables above are overrides for local and preview stacks only; leave them unset in
+production so the canonical hosts apply. `VANA_GATEWAY_URL` must be a bare HTTPS origin (or
+loopback HTTP origin). To inspect an
 already-approved scope without the UI, use the CLI; it defaults to Moksha (`VANA_NETWORK=moksha`)
 and prints only the decrypted result:
 
