@@ -30,9 +30,12 @@ type Controller = ReturnType<typeof createDirectDataController>;
 
 /**
  * The direct read's destination comes from a response, so it is checked before
- * Lorebook signs a request to it: HTTPS only, no embedded credentials. The
- * relay mints one https origin per Personal Server, so the host itself cannot
- * be pinned here.
+ * Lorebook signs a request to it. A bare https origin, like `gatewayOrigin`:
+ * the SDK appends `/v1/data/<scope>` by concatenation, so a query or fragment
+ * would send the request somewhere the signature does not name
+ * (`https://host/#x` + `/v1/data/…` requests `/`). The relay mints one origin
+ * per Personal Server (`https://<id>.relay.vana.com`), so the host itself
+ * cannot be pinned here.
  */
 function directServerUrl(value: string | undefined): string {
   let url: URL | null = null;
@@ -41,10 +44,18 @@ function directServerUrl(value: string | undefined): string {
   } catch {
     url = null;
   }
-  if (!url || url.protocol !== "https:" || url.username || url.password) {
-    throw new PersonalServerReadError("The Personal Server URL is not a usable https endpoint.", 502);
+  if (
+    !url ||
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new PersonalServerReadError("The Personal Server URL is not a bare https origin.", 502);
   }
-  return url.toString();
+  return url.origin;
 }
 
 const controllers = new Map<string, Controller>();
