@@ -20,7 +20,6 @@ import { LOREBOOK_QUICK_APP, type VanaAppDefinition } from "./constants";
 import { resolveVanaEndpoints, type VanaEndpoints } from "./endpoints";
 import {
   approvedEnclaveScopes,
-  isEnclaveReadMode,
   readResumableEnclaveScopes,
   shouldUseEnclaveRead,
 } from "./enclave";
@@ -28,6 +27,36 @@ import { readThenAcknowledge } from "./read-lifecycle";
 import { chainIdForNetwork, type VanaRuntime } from "./runtime";
 
 type Controller = ReturnType<typeof createDirectDataController>;
+
+/**
+ * The direct read's destination comes from a response, so it is checked before
+ * Lorebook signs a request to it. A bare https origin, like `gatewayOrigin`:
+ * the SDK appends `/v1/data/<scope>` by concatenation, so a query or fragment
+ * would send the request somewhere the signature does not name
+ * (`https://host/#x` + `/v1/data/…` requests `/`). The relay mints one origin
+ * per Personal Server (`https://<id>.relay.vana.com`), so the host itself
+ * cannot be pinned here.
+ */
+function directServerUrl(value: string | undefined): string {
+  let url: URL | null = null;
+  try {
+    url = new URL(value ?? "");
+  } catch {
+    url = null;
+  }
+  if (
+    !url ||
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new PersonalServerReadError("The Personal Server URL is not a bare https origin.", 502);
+  }
+  return url.origin;
+}
 
 const controllers = new Map<string, Controller>();
 
@@ -145,7 +174,7 @@ export async function readApprovedScopes(
         signTypedData: account.signTypedData,
       };
       const result = await readPersonalServerData({
-        personalServerUrl: status.personalServerUrl as string,
+        personalServerUrl: directServerUrl(status.personalServerUrl),
         scope,
         grantId,
         payerAddress: account.address,
@@ -187,7 +216,9 @@ export async function readForegroundDeliveredScopes(
   const endpoints = resolveVanaEndpoints(runtime);
   return readThenAcknowledge({
     read: async () => {
-      if (isEnclaveReadMode()) {
+      // The phone supplies and validates its own route, so a legacy owner's
+      // callback reads it directly instead of being forced into a job.
+      if (shouldUseEnclaveRead({ personalServerUrl: input.personalServerUrl })) {
         const outcome = await readResumableEnclaveScopes({
           requestId: input.requestId,
           gatewayUrl: endpoints.gatewayUrl,
@@ -211,7 +242,7 @@ export async function readForegroundDeliveredScopes(
         signTypedData: account.signTypedData,
       };
       const result = await readPersonalServerData({
-        personalServerUrl: input.personalServerUrl,
+        personalServerUrl: directServerUrl(input.personalServerUrl),
         scope,
         grantId: input.grantId,
         payerAddress: account.address,

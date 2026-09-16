@@ -373,13 +373,24 @@ test("keeps enclave reads opt-in and resolves protocol chain ids", () => {
   assert.equal(isEnclaveReadMode({}), false);
   assert.equal(shouldUseEnclaveRead({ delivery: "personal_server" }, {}), false);
   assert.equal(shouldUseEnclaveRead({ delivery: "enclave" }, {}), true);
+  // The approval's own routing wins over the deployment default, so one
+  // deployment serves both a TEE and a legacy owner.
   assert.equal(
     shouldUseEnclaveRead(
       { delivery: "personal_server" },
       { VANA_READ_MODE: "enclave" },
     ),
-    true,
+    false,
   );
+  assert.equal(
+    shouldUseEnclaveRead(
+      { personalServerUrl: "https://relay.example/ps" },
+      { VANA_READ_MODE: "enclave" },
+    ),
+    false,
+  );
+  assert.equal(shouldUseEnclaveRead({}, { VANA_READ_MODE: "enclave" }), true);
+  assert.equal(shouldUseEnclaveRead({}, {}), false);
   assert.equal(ENCLAVE_JOB_DEADLINE_SECONDS, 600);
   assert.equal(ENCLAVE_POLL_TIMEOUT_MS, 20_000);
   assert.equal(ENCLAVE_READ_WAIT_SECONDS, 25);
