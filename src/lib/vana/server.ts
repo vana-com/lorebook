@@ -5,7 +5,6 @@ import { CONTRACTS, createEscrowGatewayClient } from "@opendatalabs/vana-sdk";
 import {
   createDefaultAccessRequestClient,
   createDirectDataController,
-  getDirectEndpoints,
   PersonalServerReadError,
   readPersonalServerData,
   type EscrowPaymentConfig,
@@ -18,10 +17,7 @@ import { resolveAppUrl } from "./app-url";
 import type { RequestBinding } from "./binding";
 import { assertGrantReadReady } from "./capability";
 import { LOREBOOK_QUICK_APP, type VanaAppDefinition } from "./constants";
-import {
-  applyDirectEndpointOverrides,
-  directEndpointOverrides,
-} from "./endpoints";
+import { resolveVanaEndpoints, type VanaEndpoints } from "./endpoints";
 import {
   approvedEnclaveScopes,
   isEnclaveReadMode,
@@ -61,14 +57,13 @@ export function getVanaController(
   app: VanaAppDefinition = LOREBOOK_QUICK_APP,
   config = getVanaServerConfig(),
 ): Controller {
-  const endpoints = directEndpointOverrides();
-  const key = `${app.id}:${runtime.env}:${runtime.network}:${endpoints?.accessRequestBaseUrl ?? ""}:${endpoints?.approvalAppBaseUrl ?? ""}`;
+  const endpoints = resolveVanaEndpoints(runtime);
+  const key = `${app.id}:${runtime.env}:${runtime.network}:${endpoints.accessRequestBaseUrl}:${endpoints.approvalAppBaseUrl}`;
   const cached = controllers.get(key);
   if (cached) return cached;
 
-  // SDK keeps production app/API endpoints for production+moksha while deriving
-  // Moksha's escrow chain defaults from `network`. Do not hardcode a gateway
-  // here: that would turn an SDK-owned endpoint decision into app drift.
+  // The SDK resolves its service plane from `env` alone, so one deployment
+  // could not serve both networks. Pass the network's own endpoints instead.
   const controller = createDirectDataController({
     env: runtime.env,
     network: runtime.network,
@@ -82,7 +77,7 @@ export function getVanaController(
     // Request every scope at once so the approval mints ONE grant covering all
     // of them (avoids the BUI-732 scope-overwrite from separate DCRs).
     scopes: [...app.scopes],
-    ...(endpoints ? { endpoints } : {}),
+    endpoints,
   });
   controllers.set(key, controller);
   return controller;
@@ -111,7 +106,7 @@ export async function readApprovedScopes(
   }
   const scope = app.scopes[0];
   const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
-  const endpoints = applyDirectEndpointOverrides(getDirectEndpoints(runtime.env));
+  const endpoints = resolveVanaEndpoints(runtime);
   const signMessage = (message: string) => account.signMessage({ message });
   const acknowledge = () => acknowledgeRead(binding.requestId, account, endpoints);
   const onAcknowledgeError = (error: unknown) =>
@@ -123,7 +118,7 @@ export async function readApprovedScopes(
   if (enclaveMode) {
     const outcome = await readResumableEnclaveScopes({
       requestId: binding.requestId,
-      gatewayUrl: process.env.VANA_GATEWAY_URL ?? "",
+      gatewayUrl: endpoints.gatewayUrl,
       chainId,
       builderPrivateKey: config.appPrivateKey,
       grantId,
@@ -189,13 +184,13 @@ export async function readForegroundDeliveredScopes(
   const scope = input.scopes[0];
   const chainId = chainIdForNetwork(runtime.network);
   const account = privateKeyToAccount(config.appPrivateKey as `0x${string}`);
-  const endpoints = applyDirectEndpointOverrides(getDirectEndpoints(runtime.env));
+  const endpoints = resolveVanaEndpoints(runtime);
   return readThenAcknowledge({
     read: async () => {
       if (isEnclaveReadMode()) {
         const outcome = await readResumableEnclaveScopes({
           requestId: input.requestId,
-          gatewayUrl: process.env.VANA_GATEWAY_URL ?? "",
+          gatewayUrl: endpoints.gatewayUrl,
           chainId,
           builderPrivateKey: config.appPrivateKey,
           grantId: input.grantId,
@@ -237,7 +232,7 @@ export async function readForegroundDeliveredScopes(
 async function acknowledgeRead(
   requestId: string,
   account: ReturnType<typeof privateKeyToAccount>,
-  endpoints: ReturnType<typeof getDirectEndpoints>,
+  endpoints: VanaEndpoints,
 ): Promise<void> {
   const accessRequestClient = createDefaultAccessRequestClient({
     baseUrl: endpoints.accessRequestBaseUrl,

@@ -69,8 +69,8 @@ import {
   RUNTIME_OPTIONS,
 } from "../src/lib/vana/runtime";
 import {
-  applyDirectEndpointOverrides,
   directEndpointOverrides,
+  resolveVanaEndpoints,
 } from "../src/lib/vana/endpoints";
 import {
   approvedEnclaveScopes,
@@ -320,22 +320,51 @@ test("applies only configured Direct endpoint overrides", () => {
       approvalAppBaseUrl: "http://localhost:3083",
     },
   );
+});
+
+test("resolves the service plane from the network, not the deployment env", () => {
+  // One deployment, both networks: the query override must move every URL.
+  assert.deepEqual(resolveVanaEndpoints({ env: "production", network: "mainnet" }, {}), {
+    chainId: 1480,
+    accessRequestBaseUrl: "https://app.vana.org",
+    approvalAppBaseUrl: "https://app.vana.org",
+    escrowGatewayUrl: "https://dp-rpc.vana.org",
+    gatewayUrl: "https://dp-rpc.vana.org",
+  });
+  assert.deepEqual(resolveVanaEndpoints({ env: "dev", network: "moksha" }, {}), {
+    chainId: 14800,
+    accessRequestBaseUrl: "https://app-dev.vana.org",
+    approvalAppBaseUrl: "https://app-dev.vana.org",
+    escrowGatewayUrl: "https://dp-rpc.moksha.vana.org",
+    gatewayUrl: "https://dp-rpc.moksha.vana.org",
+  });
+
+  // The canonical map matches the SDK for the two supported pairings.
+  assert.equal(
+    resolveVanaEndpoints({ env: "dev", network: "moksha" }, {}).approvalAppBaseUrl,
+    getDirectEndpoints("dev").approvalAppBaseUrl,
+  );
+  assert.equal(
+    resolveVanaEndpoints({ env: "production", network: "mainnet" }, {}).escrowGatewayUrl,
+    getDirectEndpoints("production").escrowGatewayUrl,
+  );
+
+  // Env vars stay an override, for local and preview stacks.
   assert.deepEqual(
-    applyDirectEndpointOverrides(
+    resolveVanaEndpoints(
+      { env: "dev", network: "moksha" },
       {
-        accessRequestBaseUrl: "https://access.default",
-        approvalAppBaseUrl: "https://approval.default",
-        escrowGatewayUrl: "https://escrow.default",
-      },
-      {
-        VANA_ACCESS_REQUEST_BASE_URL: "https://access.override",
-        VANA_APPROVAL_APP_BASE_URL: "https://approval.override",
+        VANA_GATEWAY_URL: "http://localhost:3080",
+        VANA_ACCESS_REQUEST_BASE_URL: "http://localhost:3083",
+        VANA_APPROVAL_APP_BASE_URL: "http://localhost:3083",
       },
     ),
     {
-      accessRequestBaseUrl: "https://access.override",
-      approvalAppBaseUrl: "https://approval.override",
-      escrowGatewayUrl: "https://escrow.default",
+      chainId: 14800,
+      accessRequestBaseUrl: "http://localhost:3083",
+      approvalAppBaseUrl: "http://localhost:3083",
+      escrowGatewayUrl: "http://localhost:3080",
+      gatewayUrl: "http://localhost:3080",
     },
   );
 });
