@@ -43,11 +43,20 @@ export function isEnclaveReadMode(
   return env.VANA_READ_MODE?.trim().toLowerCase() === "enclave";
 }
 
+/**
+ * Pick the read transport for ONE request. The approval records which one it
+ * is, so the owner decides, not the deployment: a TEE owner's status carries
+ * `delivery: "enclave"` and no server URL; a legacy owner's (PS Lite in the
+ * Vana tab, reached over the relay) carries the URL and no `delivery`.
+ * `VANA_READ_MODE` is only the default for a status that records neither.
+ */
 export function shouldUseEnclaveRead(
-  status: { delivery?: string },
+  status: { delivery?: string; personalServerUrl?: string },
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return isEnclaveReadMode(env) || status.delivery === "enclave";
+  if (status.delivery) return status.delivery === "enclave";
+  if (status.personalServerUrl) return false;
+  return isEnclaveReadMode(env);
 }
 
 export function approvedEnclaveScopes(
