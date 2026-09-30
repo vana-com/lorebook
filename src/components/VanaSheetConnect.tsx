@@ -6,7 +6,8 @@
 //   sheet signs the person in, then asks for the request:
 //     createRequest()                     existing POST /api/vana/request
 //     POST /api/vana/request/authorization short-lived read signature
-//   person allows in the sheet, opens Vana to finish;
+//   person allows in the sheet; Vana finishes it in the sheet when the data
+//   already exists (completion "in_browser"), else in the Vana app;
 //   this tab polls status and reads exactly like the redirect flow.
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -30,6 +31,7 @@ interface SheetHandle {
 
 interface SheetEvent {
   code?: string;
+  completion?: "app" | "in_browser";
   type: "close" | "connected" | "error" | "ready" | "signed-in";
 }
 
@@ -49,7 +51,7 @@ declare global {
   }
 }
 
-type SheetFlow = "idle" | "open" | "waiting" | "reading" | "error";
+type SheetFlow = "idle" | "open" | "waiting" | "sharing" | "reading" | "error";
 
 const POLL_MS = 3_000;
 
@@ -157,7 +159,9 @@ export function VanaSheetConnect<T>({
         };
       },
       onEvent(event) {
-        if (event.type === "connected") setFlow("waiting");
+        if (event.type === "connected") {
+          setFlow(event.completion === "in_browser" ? "sharing" : "waiting");
+        }
         if (event.type === "error" && event.code === "request_failed") setFlow("error");
         if (event.type === "close") {
           handle.current = null;
@@ -169,11 +173,17 @@ export function VanaSheetConnect<T>({
     });
   }
 
-  if (flow === "waiting" || flow === "reading") {
+  if (flow === "waiting" || flow === "sharing" || flow === "reading") {
+    const label =
+      flow === "reading"
+        ? "Writing your page…"
+        : flow === "sharing"
+          ? "Getting your data from Vana…"
+          : "Finish in Vana, then come back";
     return (
       <button className="secondary-button loading" type="button" disabled>
         <span className="spinner" />
-        {flow === "reading" ? "Writing your page…" : "Finish in Vana, then come back"}
+        {label}
       </button>
     );
   }
