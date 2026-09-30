@@ -9,6 +9,7 @@ import {
 import { useEffect, useState } from "react";
 import type { LorebookSnapshot } from "@/lib/combined-snapshot";
 import { type LorebookJourney, type LorebookMode } from "@/lib/vana/constants";
+import { resolveVanaAccountOrigin } from "@/lib/vana/embed";
 import { buildRequestPath, buildRuntimeSwitchPath } from "@/lib/vana/request-path";
 import {
   resolveFixtureJourney,
@@ -17,6 +18,7 @@ import {
   RUNTIME_OPTIONS,
   type VanaRuntime,
 } from "@/lib/vana/runtime";
+import { VanaSheetConnect } from "./VanaSheetConnect";
 
 type ErrorBody = { kind?: unknown; error?: unknown; detail?: unknown };
 type LorebookErrorKind = "empty" | "failed" | "unavailable";
@@ -177,7 +179,23 @@ export function LorebookApp({
         `/api/vana/read?requestId=${encodeURIComponent(requestId)}`,
       ),
   });
-  const data = connect.state.type === "done" ? connect.state.result.data : null;
+  // The in-page Vana sheet is a second way in; its result lands on the same page.
+  const [sheetData, setSheetData] = useState<LorebookSnapshot | null>(null);
+  const [vanaAccountOrigin, setVanaAccountOrigin] = useState<string | null>(null);
+  const data = connect.state.type === "done" ? connect.state.result.data : sheetData;
+
+  useEffect(() => {
+    try {
+      const runtime = resolveLaunchRuntime(
+        new URLSearchParams(window.location.search),
+        defaultNetwork,
+        defaultEnv,
+      );
+      setVanaAccountOrigin(resolveVanaAccountOrigin(runtime.env, window.location.search));
+    } catch {
+      setVanaAccountOrigin(null);
+    }
+  }, [defaultEnv, defaultNetwork]);
 
   // The originating tab owns the whole flow: create → status poll → read → ack.
   // Nothing is persisted, so if this tab is reloaded or evicted the flow does
@@ -190,6 +208,7 @@ export function LorebookApp({
   function chooseMode(next: LorebookMode) {
     if (next === mode) return;
     connect.reset();
+    setSheetData(null);
     setMode(next);
   }
 
@@ -264,6 +283,19 @@ export function LorebookApp({
             defaultEnv={defaultEnv}
             defaultNetwork={defaultNetwork}
           />
+          {/* The deep chapter can also connect in an in-page Vana sheet. */}
+          {mode === "deep" && connect.state.type === "idle" && !sheetData && vanaAccountOrigin ? (
+            <VanaSheetConnect<LorebookSnapshot>
+              accountOrigin={vanaAccountOrigin}
+              createRequest={() =>
+                jsonFetch<{ requestId: string }>(buildRequestPath(mode, window.location.search), { method: "POST" })
+              }
+              onResult={setSheetData}
+              readResult={async (requestId) =>
+                (await readLorebookResult(`/api/vana/read?requestId=${encodeURIComponent(requestId)}`)).data
+              }
+            />
+          ) : null}
         </div>
       </section>
 
