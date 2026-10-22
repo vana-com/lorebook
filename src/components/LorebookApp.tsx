@@ -10,7 +10,7 @@ import {
 import { useEffect, useState } from "react";
 import type { LorebookSnapshot } from "@/lib/combined-snapshot";
 import { type LorebookJourney, type LorebookMode } from "@/lib/vana/constants";
-import { resolveVanaAccountOrigin, VANA_EMBED_CLIENT_ID } from "@/lib/vana/embed";
+import { isVanaSheetEnabled, resolveVanaAccountOrigin, VANA_EMBED_CLIENT_ID } from "@/lib/vana/embed";
 import { buildRequestPath, buildRuntimeSwitchPath } from "@/lib/vana/request-path";
 import {
   resolveFixtureJourney,
@@ -292,7 +292,7 @@ export function LorebookApp({
             defaultEnv={defaultEnv}
             defaultNetwork={defaultNetwork}
           />
-          {mode === "deep" && connect.state.type === "idle" && accountOrigin ? <SheetConnectAction sheet={sheet} /> : null}
+          {mode === "deep" && connect.state.type === "idle" && accountOrigin && isVanaSheetEnabled() ? <SheetConnectAction sheet={sheet} /> : null}
         </div>
       </section>
 
