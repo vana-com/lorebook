@@ -5,10 +5,12 @@ import {
   type AccessRequest,
   type AccessRequestStatus,
   type ApprovedDataResult,
+  type RequestAuthorization,
 } from "@opendatalabs/vana-sdk/react";
 import { useEffect, useState } from "react";
 import type { LorebookSnapshot } from "@/lib/combined-snapshot";
 import { type LorebookJourney, type LorebookMode } from "@/lib/vana/constants";
+import { resolveVanaAccountOrigin, VANA_EMBED_CLIENT_ID } from "@/lib/vana/embed";
 import { buildRequestPath, buildRuntimeSwitchPath } from "@/lib/vana/request-path";
 import {
   resolveFixtureJourney,
@@ -168,16 +170,31 @@ export function LorebookApp({
   defaultNetwork: VanaRuntime["network"];
 }) {
   const [mode, setMode] = useState<LorebookJourney>("quick");
-  const connect = useDirectVanaConnect<LorebookSnapshot>({
+  const transports = {
     createRequest: () => jsonFetch<AccessRequest>(buildRequestPath(mode, window.location.search), { method: "POST" }),
-    getStatus: (requestId) =>
+    getStatus: (requestId: string) =>
       jsonFetch<AccessRequestStatus>(`/api/vana/status?requestId=${encodeURIComponent(requestId)}`),
-    readResult: (requestId) =>
+    readResult: (requestId: string) =>
       readLorebookResult(
         `/api/vana/read?requestId=${encodeURIComponent(requestId)}`,
       ),
+  };
+  const connect = useDirectVanaConnect<LorebookSnapshot>(transports);
+  // The deep chapter can also connect in Vana's in-page sheet: the same flow,
+  // presented in a sheet instead of a tab.
+  const [accountOrigin, setAccountOrigin] = useState<string | null>(null);
+  const sheet = useDirectVanaConnect<LorebookSnapshot>({
+    ...transports,
+    authorizeRequest: (requestId) =>
+      jsonFetch<RequestAuthorization>(
+        `/api/vana/request/authorization?requestId=${encodeURIComponent(requestId)}`,
+        { method: "POST" },
+      ),
+    presentation: "sheet",
+    sheet: { clientId: VANA_EMBED_CLIENT_ID, appName: "Lorebook", accountOrigin: accountOrigin ?? undefined },
   });
-  const data = connect.state.type === "done" ? connect.state.result.data : null;
+  const done = connect.state.type === "done" ? connect.state : sheet.state.type === "done" ? sheet.state : null;
+  const data = done ? done.result.data : null;
 
   // The originating tab owns the whole flow: create → status poll → read → ack.
   // Nothing is persisted, so if this tab is reloaded or evicted the flow does
@@ -187,9 +204,20 @@ export function LorebookApp({
     if (isDesktopFixtureSearch(window.location.search)) setMode("desktop-saved-tracks");
   }, []);
 
+  useEffect(() => {
+    try {
+      const search = window.location.search;
+      const runtime = resolveLaunchRuntime(new URLSearchParams(search), defaultNetwork, defaultEnv);
+      setAccountOrigin(resolveVanaAccountOrigin(runtime.env, search));
+    } catch {
+      setAccountOrigin(null);
+    }
+  }, [defaultEnv, defaultNetwork]);
+
   function chooseMode(next: LorebookMode) {
     if (next === mode) return;
     connect.reset();
+    sheet.reset();
     setMode(next);
   }
 
@@ -264,6 +292,7 @@ export function LorebookApp({
             defaultEnv={defaultEnv}
             defaultNetwork={defaultNetwork}
           />
+          {mode === "deep" && connect.state.type === "idle" && accountOrigin ? <SheetConnectAction sheet={sheet} /> : null}
         </div>
       </section>
 
@@ -514,6 +543,32 @@ function ConnectAction({
         <dl><div><dt>Journey</dt><dd>{mode}</dd></div><div><dt>State</dt><dd>{state.type}</dd></div>{errorDetail ? <div><dt>Reason</dt><dd>{errorDetail}</dd></div> : null}<RuntimeDetails defaultEnv={defaultEnv} defaultNetwork={defaultNetwork} /></dl>
       </details>
     </div>
+  );
+}
+
+/** The in-page sheet's button: the sheet itself shows sign-in and consent. */
+function SheetConnectAction({ sheet }: { sheet: ReturnType<typeof useDirectVanaConnect<LorebookSnapshot>> }) {
+  const state = sheet.state;
+  if (state.type === "done") return null;
+  if (state.type === "awaiting_approval" && state.popupBlocked) {
+    // The sheet could not run on this page; the approval link still finishes it.
+    return <a className="secondary-button" href={state.request.approvalUrl} target="_blank" rel="noreferrer">Open Vana approval</a>;
+  }
+  if (state.type === "awaiting_approval" || state.type === "reading") {
+    const label =
+      state.type === "reading"
+        ? "Writing your page…"
+        : state.sheet?.progress
+          ? "Vana is collecting your data…"
+          : state.sheet?.completion
+            ? "Getting your data from Vana…"
+            : "Connecting with Vana…";
+    return <button className="secondary-button loading" type="button" disabled><span className="spinner" />{label}</button>;
+  }
+  return (
+    <button className="secondary-button" type="button" disabled={state.type === "creating"} onClick={() => void sheet.start()}>
+      {state.type === "error" ? "Try Connect with Vana again" : "Connect with Vana"}
+    </button>
   );
 }
 

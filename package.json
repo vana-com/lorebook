@@ -16,7 +16,7 @@
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
-    "@opendatalabs/vana-sdk": "4.2.0",
+    "@opendatalabs/vana-sdk": "file:vendor/opendatalabs-vana-sdk-4.3.2-connect-sheet.tgz",
     "next": "16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4",
