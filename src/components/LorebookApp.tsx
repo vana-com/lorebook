@@ -7,6 +7,7 @@ import {
   type ApprovedDataResult,
   type RequestAuthorization,
 } from "@opendatalabs/vana-sdk/react";
+import { VANA_ACCOUNT_ORIGINS } from "@opendatalabs/vana-sdk/connect/protocol";
 import { useEffect, useState } from "react";
 import type { LorebookSnapshot } from "@/lib/combined-snapshot";
 import { type LorebookJourney, type LorebookMode } from "@/lib/vana/constants";
@@ -191,7 +192,7 @@ export function LorebookApp({
         { method: "POST" },
       ),
     presentation: "sheet",
-    sheet: { clientId: VANA_EMBED_CLIENT_ID, appName: "Lorebook", accountOrigin: accountOrigin ?? undefined },
+    sheet: { clientId: VANA_EMBED_CLIENT_ID, appName: "Lorebook", accountOrigin: accountOrigin ?? VANA_ACCOUNT_ORIGINS[defaultEnv] },
   });
   const done = connect.state.type === "done" ? connect.state : sheet.state.type === "done" ? sheet.state : null;
   const data = done ? done.result.data : null;

@@ -1,14 +1,12 @@
 // Vana's in-page connect sheet: the one setting Lorebook owns. The sheet, its
 // request signature and the flow come from the SDK (`presentation: "sheet"`).
 
-import { VANA_ACCOUNT_ORIGINS } from "@opendatalabs/vana-sdk/connect/protocol";
+import { parseOriginAllowlist, resolveVanaAccountOrigin as resolve } from "@opendatalabs/vana-sdk/connect";
 import type { VanaRuntime } from "./runtime";
 
 /** Registered with Vana Account as an embed client for this origin. */
 export const VANA_EMBED_CLIENT_ID = "lorebook";
 export const VANA_ACCOUNT_OVERRIDE_PARAM = "vana_account";
-
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
 
 /**
  * Build-time facts that decide whether the sheet exists and whether a URL may
@@ -35,20 +33,6 @@ export function isVanaSheetEnabled(config: VanaEmbedConfig = VANA_EMBED_CONFIG):
   return config.sheetEnabled.trim() === "1";
 }
 
-/** Normalised bare origins from the allowlist; entries that are not https origins are dropped. */
-function allowlistedOrigins(raw: string): Set<string> {
-  const origins = new Set<string>();
-  for (const entry of raw.split(",")) {
-    try {
-      const url = new URL(entry.trim());
-      if (url.protocol === "https:" && url.origin === entry.trim().replace(/\/$/, "")) origins.add(url.origin);
-    } catch {
-      // Not a URL: ignore it.
-    }
-  }
-  return origins;
-}
-
 /**
  * Which Vana Account serves the sheet: the runtime's Account, unless a
  * non-production deploy was told (at build time) to trust the origin named by
@@ -59,17 +43,12 @@ export function resolveVanaAccountOrigin(
   search: string,
   config: VanaEmbedConfig = VANA_EMBED_CONFIG,
 ): string {
-  const fallback = VANA_ACCOUNT_ORIGINS[env];
-  // Fail closed: only a known non-production deploy may honour the override.
-  if (config.deployEnv !== "preview" && config.deployEnv !== "development") return fallback;
-  const override = new URLSearchParams(search).get(VANA_ACCOUNT_OVERRIDE_PARAM);
-  if (!override) return fallback;
-  try {
-    const url = new URL(override);
-    if (url.protocol === "https:" && allowlistedOrigins(config.previewOrigins).has(url.origin)) return url.origin;
-    const local = config.deployEnv === "development" && url.protocol === "http:" && LOCAL_HOSTS.has(url.hostname);
-    return local ? url.origin : fallback;
-  } catch {
-    return fallback;
-  }
+  return resolve({
+    env,
+    override: new URLSearchParams(search).get(VANA_ACCOUNT_OVERRIDE_PARAM),
+    previewOrigins: parseOriginAllowlist(config.previewOrigins),
+    // Fail closed: only a known non-production deploy may honour the override.
+    allowOverride: config.deployEnv === "preview" || config.deployEnv === "development",
+    allowLocal: config.deployEnv === "development",
+  });
 }

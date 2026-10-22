@@ -47,9 +47,18 @@ test("a preview deploy accepts only origins on its explicit allowlist", () => {
 
 test("the allowlist is exact origins; malformed entries are ignored", () => {
   const second = "https://vana-account-git-other-opendatalabs.vercel.app";
-  const c = config({ previewOrigins: ` not-a-url, ${PREVIEW}/path ,${second}/ ` });
+  const c = config({ previewOrigins: ` not-a-url, ${PREVIEW}/path ,${second}/ ,${second}` });
   assert.equal(resolveVanaAccountOrigin("dev", viaParam(PREVIEW), c), "https://account-dev.vana.org");
+  // A trailing-slash entry is dropped; only the bare entry for the same origin matches.
   assert.equal(resolveVanaAccountOrigin("dev", viaParam(second), c), second);
+  const slashOnly = config({ previewOrigins: `${PREVIEW}/` });
+  assert.equal(resolveVanaAccountOrigin("dev", viaParam(PREVIEW), slashOnly), "https://account-dev.vana.org");
+});
+
+test("an override must be a bare origin, matched exactly", () => {
+  for (const near of [`${PREVIEW}/path`, `${PREVIEW}/`, PREVIEW.toUpperCase(), "HTTPS://VANA-ACCOUNT-GIT-BRANCH-OPENDATALABS.VERCEL.APP"]) {
+    assert.equal(resolveVanaAccountOrigin("dev", viaParam(near), config()), "https://account-dev.vana.org");
+  }
 });
 
 test("only a local development build trusts a local Account", () => {
