@@ -158,6 +158,15 @@ service-plane/network combination you intend to use.
 For phone E2E, override `APP_URL` in `.env.local` with the exact LAN-reachable dev-server URL,
 such as `http://192.168.x.x:3010`; do not copy that placeholder literally.
 
+Optional, in-page connect sheet (build-time, off by default; leave unset in production until Vana
+Account registers the `lorebook` embed client). `?vana_account=` is honoured only on non-production
+deploys, and only for origins listed exactly here:
+
+```dotenv
+NEXT_PUBLIC_VANA_SHEET_ENABLED=1
+NEXT_PUBLIC_VANA_ACCOUNT_PREVIEW_ORIGINS=https://vana-account-git-<branch>-opendatalabs.vercel.app
+```
+
 Optional, for a shared delivery store — see [Delivery store](#delivery-store):
 
 ```dotenv
